@@ -3,6 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import { validateRuntimeEnv } from './config/env.js';
 
 // Import routes
 import authRoutes from './routes/auth.routes.js';
@@ -23,6 +24,39 @@ import walletRoutes from './routes/wallet.routes.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+validateRuntimeEnv();
+
+const certificatePreviewPathPattern = /^\/api\/admin\/events\/[^/]+\/certificates\/test\/?$/;
+const regularJsonParser = express.json({ limit: '2mb' });
+
+const parseTrustProxy = () => {
+  const value = process.env.TRUST_PROXY;
+  if (!value) return process.env.NODE_ENV === 'production' ? 1 : false;
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'false' || normalized === '0') return false;
+  if (normalized === 'true') return true;
+
+  const numericValue = Number.parseInt(normalized, 10);
+  return Number.isFinite(numericValue) ? numericValue : value;
+};
+
+const parseAllowedOrigins = () => {
+  const configured = [
+    process.env.FRONTEND_URL,
+    ...(process.env.CORS_ORIGINS || '').split(','),
+    'https://occasio.ayushh.in',
+    'https://www.occasio.ayushh.in'
+  ].filter(Boolean);
+
+  return new Set(configured.map((origin) => {
+    try {
+      return new URL(origin.trim()).origin;
+    } catch {
+      return origin.trim();
+    }
+  }));
+};
 
 // Rate limiting
 const limiter = rateLimit({
@@ -32,37 +66,33 @@ const limiter = rateLimit({
 });
 
 // Middleware
+const trustProxy = parseTrustProxy();
+if (trustProxy !== false) {
+  app.set('trust proxy', trustProxy);
+}
+
 app.use(helmet());
+app.use(limiter);
 app.use(cors({
   origin: (origin, callback) => {
-    // Log the origin for debugging
-    console.log('Incoming origin:', origin);
+    const allowedOrigins = parseAllowedOrigins();
 
-    const allowedOrigins = [
-      process.env.FRONTEND_URL,
-      'https://occasio.ayushh.in',
-      'https://www.occasio.ayushh.in'
-    ].filter(Boolean);
-    
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
 
     // Check if origin is localhost (dev environment)
-    if (process.env.NODE_ENV !== 'production' && origin.match(/^http:\/\/localhost:\d+$/)) {
+    if (process.env.NODE_ENV !== 'production' && origin.match(/^http:\/\/(localhost|127\.0\.0\.1):\d+$/)) {
       return callback(null, true);
     }
 
-    if (allowedOrigins.indexOf(origin) !== -1) {
-      return callback(null, true);
+    let normalizedOrigin;
+    try {
+      normalizedOrigin = new URL(origin).origin;
+    } catch {
+      normalizedOrigin = origin;
     }
 
-    // Explicitly allow the domain if it matches (incase of string mismatches)
-    if (origin.includes('occasio.ayushh.in')) {
-      return callback(null, true);
-    }
-
-    // For now, in development we might want to be permissive if it's not matching above
-    if (process.env.NODE_ENV !== 'production') {
+    if (allowedOrigins.has(normalizedOrigin)) {
       return callback(null, true);
     }
 
@@ -75,16 +105,26 @@ app.use(cors({
 // Webhook routes need raw body
 app.use('/api/webhooks', express.raw({ type: 'application/json' }));
 
-// Regular JSON parsing for other routes - increased limit for certificate data URLs
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-app.use(limiter);
+// Regular JSON parsing for other routes.
+app.use((req, res, next) => {
+  if (certificatePreviewPathPattern.test(req.path)) {
+    return next();
+  }
+  return regularJsonParser(req, res, next);
+});
+app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
 // Serve uploaded files
 import path from 'path';
 import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+app.use('/uploads/tickets', (req, res) => {
+  res.status(404).json({ error: 'Ticket downloads require a signed download link' });
+});
+app.use('/uploads/certificates/generated', (req, res) => {
+  res.status(404).json({ error: 'Generated certificate downloads are not public' });
+});
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Routes
@@ -107,7 +147,7 @@ app.use('/api', walletRoutes);
 app.get('/health', (req, res) => {
   res.json({
     status: 'OK',
-    version: '2026-01-10-team-access',  // Update this to verify deployment
+    version: process.env.APP_VERSION || process.env.GITHUB_SHA || 'local',
     timestamp: new Date().toISOString()
   });
 });

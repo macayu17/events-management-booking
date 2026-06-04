@@ -18,6 +18,33 @@ const createdUserEmails = [organizerEmail, teamEmail];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const isLocalSmokeUrl = (value) => {
+  try {
+    const url = new URL(value);
+    return ['localhost', '127.0.0.1', '::1'].includes(url.hostname);
+  } catch {
+    return false;
+  }
+};
+
+function assertSafeSmokeTarget() {
+  const normalizedBaseUrl = BASE_URL.replace(/\/$/, '');
+  if (isLocalSmokeUrl(normalizedBaseUrl)) return;
+
+  if (
+    process.env.ALLOW_REMOTE_SMOKE !== 'true' ||
+    process.env.CONFIRM_REMOTE_SMOKE !== normalizedBaseUrl
+  ) {
+    throw new Error(
+      `Refusing remote smoke target ${normalizedBaseUrl}. ` +
+      'Use local/disposable environments by default. To override, set ' +
+      `ALLOW_REMOTE_SMOKE=true and CONFIRM_REMOTE_SMOKE=${normalizedBaseUrl}.`
+    );
+  }
+
+  console.warn('[smoke] remote target override enabled; Prisma cleanup still uses the configured DATABASE_URL.');
+}
+
 const log = (step, detail = '') => {
   console.log(`[smoke] ${step}${detail ? `: ${detail}` : ''}`);
 };
@@ -98,11 +125,34 @@ async function waitForTicket(orderId) {
   throw new Error(`Ticket with signed QR payload was not generated for order ${orderId}`);
 }
 
-async function makeTemplateDataUrl() {
+async function makeTemplatePdfBuffer() {
   const pdfDoc = await PDFDocument.create();
   pdfDoc.addPage([600, 420]);
   const bytes = await pdfDoc.save();
-  return `data:application/pdf;base64,${Buffer.from(bytes).toString('base64')}`;
+  return Buffer.from(bytes);
+}
+
+async function uploadCertificateTemplate(token, eventId) {
+  const formData = new FormData();
+  const templateBuffer = await makeTemplatePdfBuffer();
+  formData.append('file', new Blob([templateBuffer], { type: 'application/pdf' }), 'template.pdf');
+
+  const response = await fetch(`${API_URL}/admin/events/${eventId}/certificates/upload`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
+
+  const payload = await response.json();
+  if (!response.ok) {
+    const error = new Error(`POST /admin/events/${eventId}/certificates/upload failed with ${response.status}`);
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
+  }
+
+  assert.ok(payload.url);
+  return payload.url;
 }
 
 async function cleanup() {
@@ -112,6 +162,8 @@ async function cleanup() {
 }
 
 async function main() {
+  assertSafeSmokeTarget();
+
   log('health');
   const healthResponse = await fetch(`${BASE_URL.replace(/\/$/, '')}/health`);
   assert.equal(healthResponse.ok, true);
@@ -171,9 +223,14 @@ async function main() {
   });
   assert.equal(registration.requiresPayment, true);
   assert.equal(registration.order.amountCents, 15000);
+  assert.ok(registration.checkoutAccessToken);
 
-  const checkout = await request(`/orders/${registration.order.id}/create-checkout-session`, { method: 'POST' });
+  const checkout = await request(`/orders/${registration.order.id}/create-checkout-session`, {
+    method: 'POST',
+    body: JSON.stringify({ checkoutAccessToken: registration.checkoutAccessToken }),
+  });
   assert.equal(checkout.provider, 'RAZORPAY');
+  assert.ok(checkout.checkoutAccessToken);
   const paymentId = `pay_smoke_${runId.replace(/[^a-z0-9]/gi, '')}`;
   const signature = crypto
     .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
@@ -182,6 +239,7 @@ async function main() {
   await request(`/orders/${registration.order.id}/verify-payment`, {
     method: 'POST',
     body: JSON.stringify({
+      checkoutAccessToken: checkout.checkoutAccessToken,
       razorpay_payment_id: paymentId,
       razorpay_order_id: checkout.orderId,
       razorpay_signature: signature,
@@ -210,7 +268,7 @@ async function main() {
   await request(`/team/events/${event.id}/checkin-stats`, authed(teamUser.token, 'GET'));
 
   log('certificates and analytics');
-  const templateUrl = await makeTemplateDataUrl();
+  const templateUrl = await uploadCertificateTemplate(token, event.id);
   await request(`/admin/events/${event.id}/certificates/config`, authed(token, 'PUT', {
     certificateType: 'participation',
     templateUrl,
@@ -269,7 +327,11 @@ async function main() {
       tierId: tier.id,
     }),
   });
-  const phonePeCheckout = await request(`/orders/${phonePeRegistration.order.id}/create-checkout-session`, { method: 'POST' });
+  assert.ok(phonePeRegistration.checkoutAccessToken);
+  const phonePeCheckout = await request(`/orders/${phonePeRegistration.order.id}/create-checkout-session`, {
+    method: 'POST',
+    body: JSON.stringify({ checkoutAccessToken: phonePeRegistration.checkoutAccessToken }),
+  });
   assert.equal(phonePeCheckout.provider, 'PHONEPE');
   assert.ok(phonePeCheckout.paymentUrl);
 

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 
 const clearPaymentEnv = () => {
   delete process.env.RAZORPAY_KEY_ID;
@@ -116,5 +117,96 @@ test('PhonePe client credentials use Standard Checkout V2 OAuth flow', async () 
     assert.equal(calls.length, 2);
   } finally {
     global.fetch = originalFetch;
+  }
+});
+
+test('Razorpay webhook verification uses the webhook secret, not the API key secret', async () => {
+  clearPaymentEnv();
+
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  process.env.RAZORPAY_KEY_SECRET = 'api-key-secret';
+  process.env.RAZORPAY_WEBHOOK_SECRET = 'webhook-secret';
+
+  try {
+    const body = Buffer.from(JSON.stringify({ event: 'payment.captured' }));
+    const apiKeySignature = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET).update(body).digest('hex');
+    const webhookSignature = crypto.createHmac('sha256', process.env.RAZORPAY_WEBHOOK_SECRET).update(body).digest('hex');
+
+    const mod = await import(`../src/services/payment.service.js?razorpay-webhook-secret=${Date.now()}`);
+
+    assert.equal(mod.verifyRazorpayWebhookSignature(body, apiKeySignature), false);
+    assert.equal(mod.verifyRazorpayWebhookSignature(body, webhookSignature), true);
+  } finally {
+    console.warn = originalWarn;
+    clearPaymentEnv();
+  }
+});
+
+test('PhonePe V2 status does not inject the requested order id into provider identity fields', async () => {
+  clearPaymentEnv();
+
+  process.env.PHONEPE_CLIENT_ID = 'client-id';
+  process.env.PHONEPE_CLIENT_SECRET = 'client-secret';
+  process.env.PHONEPE_CLIENT_VERSION = '1';
+  process.env.PHONEPE_ENV = 'sandbox';
+
+  const originalFetch = global.fetch;
+  global.fetch = async (url) => {
+    if (String(url).endsWith('/v1/oauth/token')) {
+      return Response.json({
+        access_token: 'token-1',
+        token_type: 'O-Bearer',
+        issued_at: 1,
+        expires_at: 9999999999,
+      });
+    }
+
+    assert.equal(String(url).endsWith('/checkout/v2/order/MUID_order-1/status'), true);
+    return Response.json({
+      orderId: 'different-provider-order',
+      amount: 50000,
+      state: 'COMPLETED',
+    });
+  };
+
+  try {
+    const mod = await import(`../src/services/payment.service.js?phonepe-v2-status=${Date.now()}`);
+    const status = await mod.checkPhonePePaymentStatus('MUID_order-1');
+
+    assert.equal(status.transactionId, 'different-provider-order');
+    assert.equal(status.merchantTransactionId, null);
+  } finally {
+    global.fetch = originalFetch;
+    clearPaymentEnv();
+  }
+});
+
+test('PhonePe configuration rejects unknown environments', async () => {
+  clearPaymentEnv();
+
+  process.env.PHONEPE_CLIENT_ID = 'client-id';
+  process.env.PHONEPE_CLIENT_SECRET = 'client-secret';
+  process.env.PHONEPE_CLIENT_VERSION = '1';
+  process.env.PHONEPE_ENV = 'prod';
+
+  const originalFetch = global.fetch;
+  const originalError = console.error;
+  global.fetch = async () => {
+    throw new Error('fetch should not run for invalid PhonePe env');
+  };
+  console.error = () => {};
+
+  try {
+    const mod = await import(`../src/services/payment.service.js?invalid-phonepe-env=${Date.now()}`);
+
+    await assert.rejects(
+      () => mod.checkPhonePePaymentStatus('merchant-order'),
+      /PHONEPE_ENV must be one of/
+    );
+  } finally {
+    global.fetch = originalFetch;
+    console.error = originalError;
+    clearPaymentEnv();
   }
 });

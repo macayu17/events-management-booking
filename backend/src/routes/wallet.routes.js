@@ -11,8 +11,24 @@ import {
     generateGoogleWalletUrl,
     getWalletAvailability
 } from '../services/wallet.service.js';
+import { verifyTicketDownloadToken } from '../utils/download-token.util.js';
+import { getTicketArtifactBlocker } from '../utils/ticket-access.util.js';
 
 const router = express.Router();
+
+const verifyWalletAccess = (req, ticket) => verifyTicketDownloadToken(req.query.token, {
+    ticketId: ticket.id,
+    orderId: ticket.orderId,
+    email: ticket.order.registration.userEmail
+});
+
+const sendArtifactBlocker = (res, ticket) => {
+    const blocker = getTicketArtifactBlocker(ticket);
+    if (!blocker) return false;
+
+    res.status(blocker.statusCode).json({ error: blocker.message });
+    return true;
+};
 
 // Check wallet availability
 router.get('/wallet/availability', (req, res) => {
@@ -40,6 +56,11 @@ router.get('/tickets/:ticketId/apple-wallet', async (req, res) => {
         if (!ticket) {
             return res.status(404).json({ error: 'Ticket not found' });
         }
+
+        if (!verifyWalletAccess(req, ticket)) {
+            return res.status(403).json({ error: 'Valid wallet download token required' });
+        }
+        if (sendArtifactBlocker(res, ticket)) return;
 
         const event = ticket.order.registration.event;
         const attendee = ticket.order.registration.formResponse;
@@ -86,6 +107,11 @@ router.get('/tickets/:ticketId/google-wallet', async (req, res) => {
         if (!ticket) {
             return res.status(404).json({ error: 'Ticket not found' });
         }
+
+        if (!verifyWalletAccess(req, ticket)) {
+            return res.status(403).json({ error: 'Valid wallet download token required' });
+        }
+        if (sendArtifactBlocker(res, ticket)) return;
 
         const event = ticket.order.registration.event;
         const attendee = ticket.order.registration.formResponse;

@@ -1,4 +1,8 @@
 import { PrismaClient } from '@prisma/client';
+import { formatDebugUrl, requireDebugScript } from './debug-guard.mjs';
+
+requireDebugScript({ name: 'debug-cert-urls' });
+
 const prisma = new PrismaClient();
 
 const all = await prisma.event.findMany({
@@ -13,11 +17,11 @@ const all = await prisma.event.findMany({
 for (const e of all) {
   console.log(`\nEvent: ${e.title} (${e.id})`);
   console.log(`  enabled: ${e.certificateEnabled}`);
-  console.log(`  Legacy URL: ${e.certificateTemplateUrl}`);
+  console.log(`  Legacy URL: ${formatDebugUrl(e.certificateTemplateUrl)}`);
   const configs = e.certificateConfigs || {};
   for (const [type, config] of Object.entries(configs)) {
     console.log(`  Config [${type}]:`);
-    console.log(`    templateUrl: ${config?.templateUrl}`);
+    console.log(`    templateUrl: ${formatDebugUrl(config?.templateUrl)}`);
     console.log(`    mapping count: ${config?.mapping?.length || 0}`);
   }
 }
@@ -28,7 +32,7 @@ if (all.length > 0) {
   const configs = event.certificateConfigs || {};
   const url = configs.participation?.templateUrl || event.certificateTemplateUrl;
   if (url) {
-    console.log(`\n--- Testing fetch of: ${url.substring(0, 80)}...`);
+    console.log(`\n--- Testing fetch of: ${formatDebugUrl(url)}`);
     
     if (url.startsWith('r2://')) {
       console.log('  Template is in R2 storage');
@@ -47,7 +51,7 @@ if (all.length > 0) {
         if (!res.ok && url.includes('cloudinary.com')) {
           const { signCloudinaryRawUrl } = await import('../src/utils/cloudinary.util.js');
           const signed = signCloudinaryRawUrl(url);
-          console.log(`  Re-signed URL: ${signed?.substring(0, 80)}...`);
+          console.log(`  Re-signed URL: ${formatDebugUrl(signed)}`);
           if (signed) {
             const res2 = await fetch(signed);
             console.log(`  Signed fetch: ${res2.status} ${res2.statusText}`);

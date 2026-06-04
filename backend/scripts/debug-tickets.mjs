@@ -1,4 +1,8 @@
 import { PrismaClient } from '@prisma/client';
+import { formatDebugUrl, requireDebugScript } from './debug-guard.mjs';
+
+requireDebugScript({ name: 'debug-tickets' });
+
 const p = new PrismaClient();
 
 const tickets = await p.ticket.findMany({
@@ -16,7 +20,7 @@ for (const t of tickets) {
     qrTicketId: qr.ticketId,
     qrMatch: qr.ticketId === t.id,
     qrHasSig: !!qr.sig,
-    pdfUrl: (t.ticketPdfUrl || '').substring(0, 60),
+    pdfUrl: formatDebugUrl(t.ticketPdfUrl),
     checkedIn: !!t.checkedInAt,
     scannedAt: !!t.scannedAt
   }));

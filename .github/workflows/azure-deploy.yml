@@ -11,7 +11,7 @@ on:
 
 env:
   AZURE_WEBAPP_NAME: occasio
-  NODE_VERSION: '20.x'
+  NODE_VERSION: '22.x'
 
 permissions:
   contents: read
@@ -41,19 +41,34 @@ jobs:
 
     - name: Generate Prisma Client
       working-directory: ./backend
+      env:
+        DATABASE_URL: ${{ secrets.AZURE_DATABASE_URL || 'postgresql://ci_user:ci_password@localhost:5432/occasio_ci' }}
       run: npx prisma generate
 
     - name: Run backend tests
       working-directory: ./backend
       run: npm test
 
+    - name: Deploy Prisma migrations
+      if: ${{ vars.AZURE_RUN_PRISMA_MIGRATIONS == 'true' }}
+      working-directory: ./backend
+      env:
+        DATABASE_URL: ${{ secrets.AZURE_DATABASE_URL }}
+      run: npm run prisma:migrate:deploy
+
+    - name: Install production dependencies for deploy package
+      working-directory: ./backend
+      run: npm ci --omit=dev
+
     - name: Zip artifact for deployment
       run: |
         cd backend
-        zip -r ../release.zip . -x "node_modules/*" -x "node_modules/.prisma/*" 
-        # Include only the generated Prisma client
-        cd node_modules
-        zip -ur ../../release.zip .prisma @prisma
+        zip -r ../release.zip . \
+          -x "test/*" \
+          -x "uploads/*" \
+          -x "tmp-local-*" \
+          -x "*.dump" \
+          -x "*.backup"
 
     - name: Deploy to Azure Web App
       uses: azure/webapps-deploy@v2

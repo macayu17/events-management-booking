@@ -1,46 +1,47 @@
-// Script to check users and events, and set admin role
-// Run with: node scripts/set-admin.mjs
-
+import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
+
 const prisma = new PrismaClient();
 
 async function main() {
-    const targetEmail = 'anayush1406@gmail.com';
+  const targetEmail = process.env.ADMIN_EMAIL;
+  const confirmedEmail = process.env.CONFIRM_ADMIN_EMAIL;
 
-    console.log('\n=== Users in Database ===');
-    const users = await prisma.user.findMany({
-        select: { id: true, email: true, name: true, role: true }
-    });
-    users.forEach(u => console.log(`- ${u.email} (${u.role}) ID: ${u.id}`));
+  if (!targetEmail) {
+    console.log('Set ADMIN_EMAIL and CONFIRM_ADMIN_EMAIL to the same address to promote a user to ADMIN.');
+    return;
+  }
 
-    console.log('\n=== Events in Database ===');
-    const events = await prisma.event.findMany({
-        select: {
-            id: true,
-            title: true,
-            organizerId: true,
-            organizer: { select: { email: true } }
-        }
-    });
-    events.forEach(e => console.log(`- "${e.title}" by ${e.organizer?.email} (organizerId: ${e.organizerId})`));
+  if (confirmedEmail !== targetEmail) {
+    console.log('Refusing to update role. CONFIRM_ADMIN_EMAIL must exactly match ADMIN_EMAIL.');
+    return;
+  }
 
-    // Find and update target user to ADMIN
-    console.log(`\n=== Setting ${targetEmail} as ADMIN ===`);
-    const targetUser = await prisma.user.findUnique({
-        where: { email: targetEmail }
-    });
+  const targetUser = await prisma.user.findUnique({
+    where: { email: targetEmail },
+    select: { email: true, role: true }
+  });
 
-    if (targetUser) {
-        await prisma.user.update({
-            where: { email: targetEmail },
-            data: { role: 'ADMIN' }
-        });
-        console.log(`✅ Updated ${targetEmail} to ADMIN role`);
-    } else {
-        console.log(`❌ User ${targetEmail} not found in database`);
-    }
+  if (!targetUser) {
+    console.log(`\nUser ${targetEmail} not found.`);
+    return;
+  }
+
+  if (targetUser.role === 'ADMIN') {
+    console.log(`\nUser ${targetEmail} is already ADMIN.`);
+    return;
+  }
+
+  await prisma.user.update({
+    where: { email: targetEmail },
+    data: { role: 'ADMIN' }
+  });
+  console.log(`\nUpdated ${targetEmail} to ADMIN role.`);
 }
 
 main()
-    .catch(e => console.error(e))
-    .finally(() => prisma.$disconnect());
+  .catch((error) => {
+    console.error('Set-admin failed:', error.message);
+    process.exitCode = 1;
+  })
+  .finally(() => prisma.$disconnect());

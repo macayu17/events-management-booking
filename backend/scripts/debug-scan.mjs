@@ -1,44 +1,69 @@
+import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
-const p = new PrismaClient();
+import { requireDebugScript } from './debug-guard.mjs';
 
-// Get the QR payload for 2FBF033A
-const ticket = await p.ticket.findFirst({
-  where: { id: { startsWith: '2fbf033a' } },
-  select: { id: true, qrPayload: true }
+const baseUrl = (process.env.DEBUG_SCAN_BASE_URL || 'http://localhost:5000').replace(/\/$/, '');
+const ticketPrefix = process.env.DEBUG_SCAN_TICKET_PREFIX;
+const email = process.env.DEBUG_SCAN_EMAIL;
+const password = process.env.DEBUG_SCAN_PASSWORD;
+const applyScan = process.env.DEBUG_SCAN_APPLY === 'true';
+
+requireDebugScript({
+  name: 'debug-scan',
+  requiredEnv: ['DEBUG_SCAN_TICKET_PREFIX', 'DEBUG_SCAN_EMAIL', 'DEBUG_SCAN_PASSWORD'],
 });
 
-console.log('Ticket ID:', ticket.id);
-console.log('QR Payload (raw string):', ticket.qrPayload);
-console.log('QR Payload (parsed):', JSON.parse(ticket.qrPayload));
+const prisma = new PrismaClient();
 
-// Now simulate what the scanner sends by calling the verify endpoint
-const loginRes = await fetch('http://localhost:5000/api/auth/login', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ email: 'anayush1406@gmail.com', password: 'test1234' })
-});
-const loginData = await loginRes.json();
-console.log('\nLogin status:', loginRes.status);
+async function main() {
+  const ticket = await prisma.ticket.findFirst({
+    where: { id: { startsWith: ticketPrefix.toLowerCase() } },
+    select: { id: true, qrPayload: true }
+  });
 
-if (loginData.token) {
-  // Simulate scan: send the raw QR payload string just like the scanner would
-  const qrPayloadStr = ticket.qrPayload;
-  console.log('\nSending to verify:', JSON.stringify({ qrPayload: qrPayloadStr }));
-  
-  const verifyRes = await fetch('http://localhost:5000/api/tickets/verify', {
+  if (!ticket) {
+    throw new Error(`No ticket found with prefix ${ticketPrefix}`);
+  }
+
+  const parsedPayload = JSON.parse(ticket.qrPayload);
+  console.log('Ticket ID:', ticket.id);
+  console.log('Ticket ID in QR:', parsedPayload.ticketId || '(missing)');
+
+  if (!applyScan) {
+    console.log('Dry run only. Set DEBUG_SCAN_APPLY=true to call /api/tickets/verify and check the ticket in.');
+    return;
+  }
+
+  const loginRes = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password })
+  });
+  const loginData = await loginRes.json();
+  console.log('Login status:', loginRes.status);
+
+  if (!loginData.token) {
+    console.log('Login failed:', loginData);
+    return;
+  }
+
+  const verifyRes = await fetch(`${baseUrl}/api/tickets/verify`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${loginData.token}`
+      Authorization: `Bearer ${loginData.token}`
     },
-    body: JSON.stringify({ qrPayload: qrPayloadStr })
+    body: JSON.stringify({ qrPayload: ticket.qrPayload })
   });
-  
+
   const verifyData = await verifyRes.json();
   console.log('Verify status:', verifyRes.status);
   console.log('Verify response:', JSON.stringify(verifyData, null, 2));
-} else {
-  console.log('Login failed:', loginData);
 }
 
-await p.$disconnect();
+main()
+  .catch((error) => {
+    console.error('Debug scan failed:', error.message);
+    process.exitCode = 1;
+  })
+  .finally(() => prisma.$disconnect());

@@ -27,23 +27,46 @@ const loadRazorpayScript = () => {
   if (razorpayScriptPromise) return razorpayScriptPromise;
 
   razorpayScriptPromise = new Promise((resolve, reject) => {
-    const existingScript = document.querySelector(`script[src="${RAZORPAY_CHECKOUT_SRC}"]`);
+    let existingScript = document.querySelector(`script[src="${RAZORPAY_CHECKOUT_SRC}"]`);
+
+    const handleLoad = (script) => {
+      script.dataset.loadStatus = 'loaded';
+      resolve();
+    };
+
+    const handleError = (script, error) => {
+      script.dataset.loadStatus = 'error';
+      script.remove();
+      razorpayScriptPromise = null;
+      reject(error instanceof Error ? error : new Error('Failed to load Razorpay checkout'));
+    };
 
     if (existingScript) {
-      existingScript.addEventListener('load', resolve, { once: true });
-      existingScript.addEventListener('error', reject, { once: true });
-      return;
+      if (existingScript.dataset.loadStatus === 'loaded' && !window.Razorpay) {
+        existingScript.remove();
+        existingScript = null;
+      } else if (existingScript.dataset.loadStatus === 'error') {
+        existingScript.remove();
+        existingScript = null;
+      } else {
+        existingScript.addEventListener('load', () => handleLoad(existingScript), { once: true });
+        existingScript.addEventListener('error', (error) => handleError(existingScript, error), { once: true });
+        return;
+      }
     }
 
     const script = document.createElement('script');
     script.src = RAZORPAY_CHECKOUT_SRC;
     script.async = true;
-    script.onload = resolve;
-    script.onerror = reject;
+    script.onload = () => handleLoad(script);
+    script.onerror = (error) => handleError(script, error);
     document.body.appendChild(script);
   });
 
-  return razorpayScriptPromise;
+  return razorpayScriptPromise.catch((error) => {
+    razorpayScriptPromise = null;
+    throw error;
+  });
 };
 
 const scheduleIdleTask = (callback) => {
@@ -54,6 +77,34 @@ const scheduleIdleTask = (callback) => {
 
   const id = window.setTimeout(callback, 1200);
   return () => window.clearTimeout(id);
+};
+
+const getSafePhonePeRedirectUrl = (value) => {
+  try {
+    const url = new URL(value);
+    const isPhonePeHost = url.hostname === 'phonepe.com' || url.hostname.endsWith('.phonepe.com');
+    return url.protocol === 'https:' && isPhonePeHost ? url.toString() : null;
+  } catch {
+    return null;
+  }
+};
+
+const getCheckoutStorageKey = (orderId) => `checkout-access:${orderId}`;
+
+const formatMoney = (amount, currency = 'INR', options = {}) => {
+  const maximumFractionDigits = options.maximumFractionDigits ?? 2;
+  const minimumFractionDigits = options.minimumFractionDigits ?? maximumFractionDigits;
+
+  try {
+    return new Intl.NumberFormat('en-IN', {
+      style: 'currency',
+      currency,
+      minimumFractionDigits,
+      maximumFractionDigits
+    }).format(amount);
+  } catch {
+    return `${currency} ${amount.toFixed(maximumFractionDigits)}`;
+  }
 };
 
 export default function RegistrationPage() {
@@ -70,6 +121,7 @@ export default function RegistrationPage() {
   const [appliedDiscount, setAppliedDiscount] = useState(null);
   const [discountMsg, setDiscountMsg] = useState('');
   const [paymentGateway, setPaymentGateway] = useState('RAZORPAY');
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
 
   const { register, handleSubmit, formState: { errors } } = useForm();
 
@@ -89,7 +141,10 @@ export default function RegistrationPage() {
       setForm(formRes.data);
       setTiers(tiersRes.data || []);
       if (tiersRes.data && tiersRes.data.length > 0) {
-        const firstAvailableTier = tiersRes.data.find((tier) => !tier.capacity || tier.soldCount < tier.capacity);
+        const firstAvailableTier = tiersRes.data.find((tier) => {
+          const reservedCount = tier.reservedCount ?? tier.soldCount;
+          return !tier.capacity || reservedCount < tier.capacity;
+        });
         setSelectedTier(firstAvailableTier || null);
       }
     } catch (error) {
@@ -137,6 +192,7 @@ export default function RegistrationPage() {
   const currency = event?.currency || 'INR';
   const fields = form?.schemaJson?.fields || [];
   const isPaidEvent = !isRsvpEvent && basePriceCents > 0;
+  const registrationClosed = event?.startTime ? new Date(event.startTime) <= new Date() : false;
   const formattedDate = event?.startTime
     ? new Intl.DateTimeFormat('en-IN', {
       weekday: 'short',
@@ -169,13 +225,48 @@ export default function RegistrationPage() {
     return <User size={17} />;
   };
 
+  const metadataForField = (field) => {
+    const label = `${field.label} ${field.key}`.toLowerCase();
+
+    if (field.type === 'email' || label.includes('email')) {
+      return { autoComplete: 'email', inputMode: 'email', spellCheck: false };
+    }
+    if (field.type === 'tel' || label.includes('phone') || label.includes('mobile') || label.includes('whatsapp')) {
+      return { autoComplete: 'tel', inputMode: 'tel', spellCheck: false };
+    }
+    if (label.includes('name')) {
+      return { autoComplete: 'name' };
+    }
+    if (field.type === 'number') {
+      return { inputMode: 'numeric' };
+    }
+
+    return {};
+  };
+
+  const getResponseValueByLabel = (data, labels) => {
+    for (const field of fields) {
+      const signature = `${field.label} ${field.key}`.toLowerCase();
+      if (labels.some((label) => signature.includes(label)) && data[field.key]) {
+        return String(data[field.key]);
+      }
+    }
+    return '';
+  };
+
   const onSubmit = async (data) => {
+    if (registrationClosed) {
+      toast.error('Registration is closed for this event.');
+      return;
+    }
+
     if (noTierAvailable) {
       toast.error('No ticket tier is available for this event.');
       return;
     }
 
     setSubmitting(true);
+    let paymentHandoffStarted = false;
 
     try {
       const regResponse = await api.post(`/events/${id}/register`, {
@@ -185,19 +276,40 @@ export default function RegistrationPage() {
         tierId: selectedTier?.id
       });
 
-      const { order, requiresPayment } = regResponse.data;
+      const { order, requiresPayment, checkoutAccessToken } = regResponse.data;
 
       if (!requiresPayment) {
         toast.success('Registration successful!');
-        navigate('/success', { state: { eventId: event.id, orderId: order.id } });
+        navigate('/success', {
+          state: {
+            eventId: event.id,
+            orderId: order.id,
+            downloadToken: regResponse.data.downloadToken
+          }
+        });
         return;
       }
 
-      const checkoutResponse = await api.post(`/orders/${order.id}/create-checkout-session`);
+      if (!checkoutAccessToken) {
+        toast.error('Checkout session could not be started. Please try again.');
+        return;
+      }
+
+      const checkoutResponse = await api.post(`/orders/${order.id}/create-checkout-session`, {
+        checkoutAccessToken
+      });
       const checkoutData = checkoutResponse.data;
+      const activeCheckoutToken = checkoutData.checkoutAccessToken || checkoutAccessToken;
 
       if (checkoutData.provider === 'PHONEPE') {
-        window.location.href = checkoutData.paymentUrl;
+        const paymentUrl = getSafePhonePeRedirectUrl(checkoutData.paymentUrl);
+        if (!paymentUrl) {
+          toast.error('Payment gateway returned an invalid redirect. Please try again.');
+          return;
+        }
+        sessionStorage.setItem(getCheckoutStorageKey(order.id), activeCheckoutToken);
+        paymentHandoffStarted = true;
+        window.location.href = paymentUrl;
         return;
       }
 
@@ -223,50 +335,72 @@ export default function RegistrationPage() {
         description: 'Event Registration',
         order_id: orderId,
         handler: async function (response) {
+          setCheckoutOpen(false);
           setProcessingPayment(true);
           try {
-            await api.post(`/orders/${order.id}/verify-payment`, {
+            const verifyResponse = await api.post(`/orders/${order.id}/verify-payment`, {
+              checkoutAccessToken: activeCheckoutToken,
               razorpay_payment_id: response.razorpay_payment_id,
               razorpay_order_id: response.razorpay_order_id,
               razorpay_signature: response.razorpay_signature
             });
 
             toast.success('Payment successful! Check your email for the ticket.');
-            navigate('/success', { state: { eventId: event.id, orderId: order.id } });
+            navigate('/success', {
+              state: {
+                eventId: event.id,
+                orderId: order.id,
+                downloadToken: verifyResponse.data.downloadToken
+              }
+            });
           } catch (error) {
             console.error('Payment verification error:', error);
             toast.error('Payment completed but verification failed. Please contact support.');
             setProcessingPayment(false);
+            setSubmitting(false);
           }
         },
         prefill: {
-          name: data.name,
-          email: data.email,
-          contact: data.phone || ''
+          name: getResponseValueByLabel(data, ['name']) || data.name || '',
+          email: getResponseValueByLabel(data, ['email']) || data.email || '',
+          contact: getResponseValueByLabel(data, ['phone', 'mobile', 'whatsapp']) || data.phone || ''
         },
         theme: {
           color: '#E23744'
+        },
+        modal: {
+          ondismiss: function () {
+            setCheckoutOpen(false);
+            setProcessingPayment(false);
+            setSubmitting(false);
+          }
         }
       };
 
       const razorpay = new window.Razorpay(options);
-      razorpay.open();
-
       razorpay.on('payment.failed', function () {
         toast.error('Payment failed. Please try again.');
+        setCheckoutOpen(false);
+        setProcessingPayment(false);
+        setSubmitting(false);
       });
+      paymentHandoffStarted = true;
+      setCheckoutOpen(true);
+      razorpay.open();
     } catch (error) {
       console.error('Registration error:', error);
       const errorMessage = error.response?.data?.message || error.response?.data?.error || 'Registration failed';
       toast.error(errorMessage);
     } finally {
-      setSubmitting(false);
+      if (!paymentHandoffStarted) {
+        setSubmitting(false);
+      }
     }
   };
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#09090b]">
+      <div className="flex min-h-[52vh] items-center justify-center">
         <div className="relative">
           <div className="w-16 h-16 rounded-full border-4 border-white/10" />
           <div className="absolute left-0 top-0 h-16 w-16 animate-spin rounded-full border-t-4 border-[#E23744]" />
@@ -295,7 +429,7 @@ export default function RegistrationPage() {
 
   if (!form) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#09090b] px-4">
+      <div className="flex min-h-[52vh] items-center justify-center px-4">
         <div className="text-center">
           <h2 className="mb-4 text-xl font-bold text-white">Registration form not available</h2>
           <button onClick={() => navigate('/')} className="rounded-full bg-white/10 px-6 py-2 text-white transition-all hover:bg-white/20">Go Home</button>
@@ -304,25 +438,53 @@ export default function RegistrationPage() {
     );
   }
 
-  return (
-    <main className="relative min-h-screen overflow-hidden bg-[#09090b] px-4 py-8 text-white sm:px-6 lg:px-8">
-      <div className="pointer-events-none fixed inset-0">
-        <div className="absolute left-[-12rem] top-[-8rem] h-[30rem] w-[30rem] rounded-full bg-[#E23744]/15 blur-[120px]" />
-        <div className="absolute right-[-10rem] top-[18rem] h-[28rem] w-[28rem] rounded-full bg-white/[0.05] blur-[120px]" />
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.06),transparent_32rem)]" />
-      </div>
+  if (registrationClosed) {
+    return (
+      <section className="relative flex min-h-[62vh] items-center justify-center overflow-hidden py-10 text-white">
+        <section className="relative z-10 w-full max-w-lg rounded-[2rem] border border-white/10 bg-[#12100e]/90 p-8 text-center shadow-[0_24px_90px_rgba(0,0,0,0.38)] backdrop-blur-2xl">
+          <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl border border-[#E23744]/25 bg-[#E23744]/10 text-[#ff6c76]">
+            <CalendarDays size={24} />
+          </div>
+          <p className="admin-eyebrow mb-3">Registration closed</p>
+          <h1 className="text-3xl font-black tracking-tight text-white">{event.title}</h1>
+          <p className="mt-3 text-sm leading-6 text-[#aaa096]">
+            This event has already started, so new registrations are no longer accepted.
+          </p>
+          <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.04] p-4 text-left">
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#8f867d]">Event time</p>
+            <p className="mt-1 font-bold text-[#f7efe3]">{formattedDate}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => navigate(`/events/${id}`)}
+            className="mt-7 inline-flex items-center justify-center rounded-full bg-[#E23744] px-6 py-3 text-sm font-black text-white shadow-[0_16px_36px_rgba(226,55,68,0.24)] transition-all hover:bg-[#f04552]"
+          >
+            Back to event
+          </button>
+        </section>
+      </section>
+    );
+  }
 
+  return (
+    <section className="relative min-h-[calc(100dvh-12rem)] overflow-hidden py-2 text-white sm:py-4">
       <div className="relative z-10 mx-auto grid w-full max-w-6xl gap-6 lg:grid-cols-[0.9fr_1.1fr] lg:items-start">
         <aside className="lg:sticky lg:top-8">
           <div className="overflow-hidden rounded-[2rem] border border-white/10 bg-[#12100e]/85 shadow-[0_24px_90px_rgba(0,0,0,0.38)] backdrop-blur-2xl">
-            <div
-              className="relative min-h-[260px] bg-[#161111] bg-cover bg-center"
-              style={posterImage ? { backgroundImage: `url(${posterImage})` } : undefined}
-            >
+            <div className="relative min-h-[260px] overflow-hidden bg-[#161111]">
+              {posterImage && (
+                <img
+                  src={posterImage}
+                  alt={`${event.title} poster`}
+                  className="absolute inset-0 h-full w-full object-cover"
+                  loading="eager"
+                  decoding="async"
+                />
+              )}
               <div className="absolute inset-0 bg-gradient-to-t from-[#12100e] via-[#12100e]/45 to-black/20" />
-              <div className="absolute bottom-0 left-0 right-0 p-6">
+              <div className="absolute bottom-0 left-0 right-0 min-w-0 p-6">
                 <p className="admin-eyebrow mb-3">Event registration</p>
-                <h1 className="text-4xl font-black leading-tight tracking-tight text-white md:text-5xl">{event.title}</h1>
+                <h1 className="break-words text-balance text-4xl font-black leading-tight tracking-tight text-white md:text-5xl">{event.title}</h1>
               </div>
             </div>
 
@@ -337,15 +499,15 @@ export default function RegistrationPage() {
 
               <div className="flex gap-3 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
                 <MapPin className="mt-0.5 shrink-0 text-[#E23744]" size={20} />
-                <div>
+                <div className="min-w-0">
                   <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#8f867d]">Venue</p>
-                  <p className="mt-1 font-bold text-[#f7efe3]">{event.location || 'Venue to be announced'}</p>
+                  <p className="mt-1 break-words font-bold text-[#f7efe3]">{event.location || 'Venue to be announced'}</p>
                 </div>
               </div>
 
               <div className="rounded-[1.5rem] border border-[#E23744]/25 bg-[#E23744]/10 p-5">
                 <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#ff7b84]">Amount due</p>
-                <p className="mt-2 text-4xl font-black text-white">{noTierAvailable ? 'Sold out' : total === 0 ? 'Free' : `${currency} ${total.toFixed(2)}`}</p>
+                <p className="mt-2 text-4xl font-black text-white">{noTierAvailable ? 'Sold out' : total === 0 ? 'Free' : formatMoney(total, currency)}</p>
                 {selectedTier && <p className="mt-2 text-sm text-[#aaa096]">Selected tier: {selectedTier.name}</p>}
               </div>
 
@@ -384,15 +546,22 @@ export default function RegistrationPage() {
               <div className="grid gap-4 md:grid-cols-2">
                 {fields.map((field) => {
                   const isLong = field.type === 'textarea' || field.type === 'select';
+                  const fieldId = `registration-${field.key}`;
+                  const errorId = `${fieldId}-error`;
+                  const fieldMetadata = metadataForField(field);
                   return (
                     <div key={field.key} className={isLong ? 'md:col-span-2' : ''}>
-                      <label className="mb-2 block text-xs font-bold uppercase tracking-[0.18em] text-[#aaa096]">
+                      <label htmlFor={fieldId} className="mb-2 block text-xs font-bold uppercase tracking-[0.18em] text-[#aaa096]">
                         {field.label} {field.required && <span className="text-[#E23744]">*</span>}
                       </label>
 
                       {field.type === 'select' ? (
                         <select
+                          id={fieldId}
                           {...register(field.key, registerOptions(field))}
+                          {...fieldMetadata}
+                          aria-invalid={errors[field.key] ? 'true' : 'false'}
+                          aria-describedby={errors[field.key] ? errorId : undefined}
                           className="auth-input"
                         >
                           <option value="">Select an option</option>
@@ -402,7 +571,11 @@ export default function RegistrationPage() {
                         </select>
                       ) : field.type === 'textarea' ? (
                         <textarea
+                          id={fieldId}
                           {...register(field.key, registerOptions(field))}
+                          {...fieldMetadata}
+                          aria-invalid={errors[field.key] ? 'true' : 'false'}
+                          aria-describedby={errors[field.key] ? errorId : undefined}
                           className="auth-input min-h-[110px] resize-none"
                           placeholder={`Enter ${field.label.toLowerCase()}`}
                         />
@@ -412,8 +585,12 @@ export default function RegistrationPage() {
                             {iconForField(field)}
                           </span>
                           <input
+                            id={fieldId}
                             type={field.type}
                             {...register(field.key, registerOptions(field))}
+                            {...fieldMetadata}
+                            aria-invalid={errors[field.key] ? 'true' : 'false'}
+                            aria-describedby={errors[field.key] ? errorId : undefined}
                             className="auth-input pl-12"
                             placeholder={`Enter ${field.label.toLowerCase()}`}
                           />
@@ -421,7 +598,7 @@ export default function RegistrationPage() {
                       )}
 
                       {errors[field.key] && (
-                        <p className="mt-2 text-xs font-semibold text-[#ff5a66]">This field is required.</p>
+                        <p id={errorId} className="mt-2 text-xs font-semibold text-[#ff5a66]">This field is required.</p>
                       )}
                     </div>
                   );
@@ -444,12 +621,14 @@ export default function RegistrationPage() {
                 <div className="grid gap-3 sm:grid-cols-2">
                   {tiers.map((tier) => (
                     (() => {
-                      const soldOut = Boolean(tier.capacity && tier.soldCount >= tier.capacity);
+                      const reservedCount = tier.reservedCount ?? tier.soldCount;
+                      const remainingCount = tier.availableCount ?? (tier.capacity ? Math.max(0, tier.capacity - reservedCount) : null);
+                      const soldOut = Boolean(tier.capacity && remainingCount <= 0);
 
                       return (
                         <label
                           key={tier.id}
-                          className={`relative rounded-[1.35rem] border p-4 transition-all ${soldOut
+                          className={`relative min-w-0 rounded-[1.35rem] border p-4 transition-all focus-within:ring-2 focus-within:ring-[#E23744]/45 ${soldOut
                             ? 'cursor-not-allowed border-white/5 bg-white/[0.02] opacity-55'
                             : selectedTier?.id === tier.id
                               ? 'cursor-pointer border-[#E23744] bg-[#E23744]/10 shadow-[0_18px_45px_rgba(226,55,68,0.12)]'
@@ -465,16 +644,16 @@ export default function RegistrationPage() {
                             onChange={() => !soldOut && setSelectedTier(tier)}
                             checked={selectedTier?.id === tier.id}
                           />
-                          <div className="flex items-start justify-between gap-4">
-                            <div>
-                              <p className="font-black text-white">{tier.name}</p>
-                              {tier.description && <p className="mt-1 text-sm text-[#8f867d]">{tier.description}</p>}
+                          <div className="flex min-w-0 items-start justify-between gap-4">
+                            <div className="min-w-0">
+                              <p className="break-words font-black text-white">{tier.name}</p>
+                              {tier.description && <p className="mt-1 break-words text-sm text-[#8f867d]">{tier.description}</p>}
                             </div>
-                            <p className="shrink-0 text-lg font-black text-[#ff5a66]">₹{(tier.priceCents / 100).toFixed(0)}</p>
+                              <p className="shrink-0 text-lg font-black text-[#ff5a66]">{formatMoney(tier.priceCents / 100, currency, { maximumFractionDigits: 0 })}</p>
                           </div>
                           {tier.capacity && (
                             <p className={`mt-3 text-xs font-bold uppercase tracking-[0.16em] ${soldOut ? 'text-[#ff5a66]' : 'text-[#8f867d]'}`}>
-                              {soldOut ? 'Sold out' : `${Math.max(0, tier.capacity - tier.soldCount)} remaining`}
+                              {soldOut ? 'Sold out' : `${remainingCount} remaining`}
                             </p>
                           )}
                         </label>
@@ -500,28 +679,29 @@ export default function RegistrationPage() {
                 <div className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
                   <div className="rounded-[1.35rem] border border-white/10 bg-white/[0.035] p-5">
                     <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#8f867d]">Total amount</p>
-                    <p className="mt-2 text-3xl font-black text-white">{total === 0 ? 'Free' : `${currency} ${total.toFixed(2)}`}</p>
+                    <p className="mt-2 text-3xl font-black text-white">{total === 0 ? 'Free' : formatMoney(total, currency)}</p>
                   </div>
 
                   <div>
-                    <label className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-[#aaa096]">
+                    <label htmlFor="discount-code" className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-[#aaa096]">
                       <Tag size={13} /> Promo code
                     </label>
-                    <div className="flex gap-2">
+                    <div className="flex min-w-0 gap-2">
                       <input
+                        id="discount-code"
                         type="text"
                         value={discountCode}
                         onChange={(e) => setDiscountCode(e.target.value.toUpperCase())}
-                        className="auth-input font-mono uppercase tracking-[0.22em]"
+                        className="auth-input min-w-0 flex-1 font-mono uppercase tracking-[0.18em] sm:tracking-[0.22em]"
                         placeholder="ENTER CODE"
                         disabled={!!appliedDiscount}
                       />
                       {appliedDiscount ? (
-                        <button type="button" onClick={() => { setAppliedDiscount(null); setDiscountCode(''); setDiscountMsg(''); }} className="rounded-2xl border border-red-500/20 bg-red-500/10 px-5 text-sm font-bold text-red-300 transition-all hover:bg-red-500/20">
+                        <button type="button" onClick={() => { setAppliedDiscount(null); setDiscountCode(''); setDiscountMsg(''); }} className="shrink-0 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 text-sm font-bold text-red-300 transition-colors hover:bg-red-500/20 sm:px-5">
                           Remove
                         </button>
                       ) : (
-                        <button type="button" onClick={handleApplyDiscount} className="rounded-2xl border border-white/10 bg-white/[0.08] px-5 text-sm font-bold text-white transition-all hover:bg-white/[0.14]">
+                        <button type="button" onClick={handleApplyDiscount} className="shrink-0 rounded-2xl border border-white/10 bg-white/[0.08] px-4 text-sm font-bold text-white transition-colors hover:bg-white/[0.14] sm:px-5">
                           Apply
                         </button>
                       )}
@@ -557,7 +737,7 @@ export default function RegistrationPage() {
 
             <button
               type="submit"
-              disabled={submitting || noTierAvailable}
+              disabled={submitting || checkoutOpen || noTierAvailable}
               className="flex w-full items-center justify-center gap-3 rounded-full bg-[#E23744] px-6 py-4 text-base font-black text-white shadow-[0_18px_45px_rgba(226,55,68,0.25)] transition-all hover:-translate-y-0.5 hover:bg-[#f04552] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
             >
               {submitting ? (
@@ -567,7 +747,7 @@ export default function RegistrationPage() {
                 </>
               ) : (
                 <>
-                  {noTierAvailable ? 'Sold out' : total === 0 ? 'Complete registration' : `Pay ${currency} ${total.toFixed(2)}`}
+                  {noTierAvailable ? 'Sold out' : total === 0 ? 'Complete registration' : `Pay ${formatMoney(total, currency)}`}
                   <ArrowRight size={19} />
                 </>
               )}
@@ -575,19 +755,19 @@ export default function RegistrationPage() {
           </form>
         </section>
       </div>
-    </main>
+    </section>
   );
 }
 
 function PaymentOption({ active, logo, title, subtitle, onChange }) {
   return (
-    <label className={`relative flex cursor-pointer items-center gap-4 rounded-[1.35rem] border p-4 transition-all ${active
+    <label className={`relative flex cursor-pointer items-center gap-4 rounded-[1.35rem] border p-4 transition-all focus-within:ring-2 focus-within:ring-[#E23744]/45 ${active
       ? 'border-[#E23744] bg-[#E23744]/10 shadow-[0_18px_45px_rgba(226,55,68,0.12)]'
       : 'border-white/10 bg-white/[0.035] hover:border-white/25'
       }`}>
       <input type="radio" name="paymentGateway" className="sr-only" onChange={onChange} checked={active} />
       <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white p-2">
-        <img src={logo} alt={title} className="h-full w-full object-contain" />
+        <img src={logo} alt="" aria-hidden="true" className="h-full w-full object-contain" />
       </span>
       <span className="min-w-0 flex-1">
         <span className="block font-black text-white">{title}</span>

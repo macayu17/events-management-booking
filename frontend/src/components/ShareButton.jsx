@@ -1,27 +1,40 @@
 import { Share2 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import toast from 'react-hot-toast';
+import {
+  buildPlatformShareUrl,
+  buildSharePayload,
+  copyShareUrl,
+  openShareWindow,
+  shareWithDevice
+} from '../utils/share';
 
 export default function ShareButton({ event, url, title, description }) {
   const [showMenu, setShowMenu] = useState(false);
+  const menuId = useId();
+  const sharePayload = buildSharePayload({ event, url, title, description });
 
-  // Support both event object and separate props
-  const shareUrl = url || (event ? `${window.location.origin}/events/${event.id}` : window.location.href);
-  const shareTitle = title || event?.title || '';
-  const shareDescription = description || event?.description || '';
-  const shareText = `Check out ${shareTitle}${shareDescription ? ' - ' + shareDescription.substring(0, 100) + '...' : ''}`;
+  useEffect(() => {
+    if (!showMenu) return undefined;
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setShowMenu(false);
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [showMenu]);
 
   const handleShare = async (platform) => {
     setShowMenu(false);
 
     if (platform === 'native' && navigator.share) {
       try {
-        await navigator.share({
-          title: shareTitle,
-          text: shareText,
-          url: shareUrl
-        });
-        toast.success('Shared successfully!');
+        await shareWithDevice(sharePayload);
+        toast.success('Shared successfully');
       } catch (error) {
         if (error.name !== 'AbortError') {
           console.error('Share error:', error);
@@ -30,39 +43,33 @@ export default function ShareButton({ event, url, title, description }) {
       return;
     }
 
-    let openUrl = '';
-    switch (platform) {
-      case 'facebook':
-        openUrl = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}`;
-        break;
-      case 'twitter':
-        openUrl = `https://twitter.com/intent/tweet?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(shareText)}`;
-        break;
-      case 'linkedin':
-        openUrl = `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(shareUrl)}`;
-        break;
-      case 'whatsapp':
-        openUrl = `https://wa.me/?text=${encodeURIComponent(shareText + ' ' + shareUrl)}`;
-        break;
-      case 'email':
-        openUrl = `mailto:?subject=${encodeURIComponent(shareTitle)}&body=${encodeURIComponent(shareText + '\n\n' + shareUrl)}`;
-        break;
-      case 'copy':
-        navigator.clipboard.writeText(shareUrl);
-        toast.success('Link copied to clipboard!');
-        return;
+    if (platform === 'copy') {
+      try {
+        await copyShareUrl(sharePayload.url);
+        toast.success('Link copied to clipboard');
+      } catch (error) {
+        console.error('Clipboard error:', error);
+        toast.error('Failed to copy link');
+      }
+      return;
     }
 
+    const openUrl = buildPlatformShareUrl(platform, sharePayload);
     if (openUrl) {
-      window.open(openUrl, '_blank', 'width=600,height=400');
+      openShareWindow(openUrl);
     }
   };
 
   return (
     <div className="relative">
       <button
+        type="button"
         onClick={() => setShowMenu(!showMenu)}
-        className="flex items-center space-x-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg transition-colors"
+        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-bold text-[#d9d0c6] transition-colors hover:bg-[#f2e7d8] hover:text-[#17110d] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744]"
+        aria-label="Share event"
+        aria-expanded={showMenu}
+        aria-haspopup="menu"
+        aria-controls={showMenu ? menuId : undefined}
       >
         <Share2 size={18} />
         <span>Share</span>
@@ -70,55 +77,76 @@ export default function ShareButton({ event, url, title, description }) {
 
       {showMenu && (
         <>
-          <div
+          <button
+            type="button"
+            aria-label="Close share menu"
             className="fixed inset-0 z-10"
             onClick={() => setShowMenu(false)}
-          ></div>
-          <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 z-20 py-2">
+          />
+          <div
+            id={menuId}
+            role="menu"
+            aria-label="Share options"
+            className="absolute right-0 z-20 mt-2 w-52 rounded-2xl border border-white/10 bg-[#12100e] py-2 shadow-[0_18px_70px_rgba(0,0,0,0.35)]"
+          >
             {navigator.share && (
               <button
+                type="button"
+                role="menuitem"
                 onClick={() => handleShare('native')}
-                className="w-full text-left px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 transition-colors"
+                className="w-full px-4 py-2.5 text-left text-sm font-semibold text-[#d9d0c6] transition-colors hover:bg-white/[0.06] hover:text-white"
               >
-                📱 Share via...
+                Share via device
               </button>
             )}
             <button
+              type="button"
+              role="menuitem"
               onClick={() => handleShare('facebook')}
-              className="w-full text-left px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 transition-colors"
+              className="w-full px-4 py-2.5 text-left text-sm font-semibold text-[#d9d0c6] transition-colors hover:bg-white/[0.06] hover:text-white"
             >
-              📘 Facebook
+              Facebook
             </button>
             <button
+              type="button"
+              role="menuitem"
               onClick={() => handleShare('twitter')}
-              className="w-full text-left px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 transition-colors"
+              className="w-full px-4 py-2.5 text-left text-sm font-semibold text-[#d9d0c6] transition-colors hover:bg-white/[0.06] hover:text-white"
             >
-              🐦 Twitter
+              X
             </button>
             <button
+              type="button"
+              role="menuitem"
               onClick={() => handleShare('linkedin')}
-              className="w-full text-left px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 transition-colors"
+              className="w-full px-4 py-2.5 text-left text-sm font-semibold text-[#d9d0c6] transition-colors hover:bg-white/[0.06] hover:text-white"
             >
-              💼 LinkedIn
+              LinkedIn
             </button>
             <button
+              type="button"
+              role="menuitem"
               onClick={() => handleShare('whatsapp')}
-              className="w-full text-left px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 transition-colors"
+              className="w-full px-4 py-2.5 text-left text-sm font-semibold text-[#d9d0c6] transition-colors hover:bg-white/[0.06] hover:text-white"
             >
-              💬 WhatsApp
+              WhatsApp
             </button>
             <button
+              type="button"
+              role="menuitem"
               onClick={() => handleShare('email')}
-              className="w-full text-left px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 transition-colors"
+              className="w-full px-4 py-2.5 text-left text-sm font-semibold text-[#d9d0c6] transition-colors hover:bg-white/[0.06] hover:text-white"
             >
-              📧 Email
+              Email
             </button>
-            <hr className="my-2 border-gray-200 dark:border-gray-700" />
+            <hr className="my-2 border-white/10" />
             <button
+              type="button"
+              role="menuitem"
               onClick={() => handleShare('copy')}
-              className="w-full text-left px-4 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 font-medium text-primary-600 dark:text-primary-400 transition-colors"
+              className="w-full px-4 py-2.5 text-left text-sm font-black text-[#ff9aa2] transition-colors hover:bg-[#E23744]/10 hover:text-white"
             >
-              🔗 Copy Link
+              Copy link
             </button>
           </div>
         </>

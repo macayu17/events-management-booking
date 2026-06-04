@@ -133,6 +133,7 @@ initializeRedis();
 export async function enqueueTicketGeneration(orderId) {
   if (isRedisAvailable && ticketQueue) {
     await ticketQueue.add('generate-ticket', { orderId }, {
+      jobId: `ticket:${orderId}`,
       attempts: 3,
       backoff: {
         type: 'exponential',

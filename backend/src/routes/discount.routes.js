@@ -1,7 +1,16 @@
 import express from 'express';
-import { body, query, validationResult } from 'express-validator';
+import { body, validationResult } from 'express-validator';
 import prisma from '../config/db.js';
 import { authenticate, requireOrganizer } from '../middleware/auth.middleware.js';
+import {
+    parseNullableDateInput,
+    parseNullableIntegerInput,
+    routeInputError
+} from '../utils/route-input.util.js';
+import {
+    hasValidDiscountAmount,
+    normalizeDiscountAmountForStorage
+} from '../utils/registration-pricing.util.js';
 
 const router = express.Router();
 
@@ -20,15 +29,25 @@ router.post('/validate', [
                     eventId,
                     code: normalizedCode
                 }
+            },
+            include: {
+                event: {
+                    select: {
+                        published: true,
+                        startTime: true
+                    }
+                }
             }
         });
 
-        if (!discount || !discount.isActive) {
+        if (!discount || !discount.isActive || !discount.event?.published) {
             return res.status(404).json({ error: 'Invalid discount code' });
         }
 
         // checks
         const now = new Date();
+        if (discount.event.startTime <= now) return res.status(409).json({ error: 'Registration is closed for this event' });
+        if (!hasValidDiscountAmount(discount)) return res.status(404).json({ error: 'Invalid discount code' });
         if (discount.validFrom && discount.validFrom > now) return res.status(400).json({ error: 'Code not active yet' });
         if (discount.validUntil && discount.validUntil < now) return res.status(400).json({ error: 'Code expired' });
         if (discount.maxUses && discount.usedCount >= discount.maxUses) return res.status(400).json({ error: 'Code usage limit reached' });
@@ -53,6 +72,12 @@ router.use(requireOrganizer);
 router.get('/events/:eventId', async (req, res) => {
     try {
         const { eventId } = req.params;
+        const event = await prisma.event.findUnique({ where: { id: eventId } });
+        if (!event) return res.status(404).json({ error: 'Event not found' });
+        if (event.organizerId !== req.user.id && req.user.role !== 'ADMIN') {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+
         const discountCodes = await prisma.discountCode.findMany({
             where: { eventId },
             orderBy: { createdAt: 'desc' }
@@ -65,15 +90,23 @@ router.get('/events/:eventId', async (req, res) => {
 
 // Create code
 router.post('/events/:eventId', [
-    body('code').notEmpty().trim().toUpperCase(),
+    body('code').trim().notEmpty().toUpperCase(),
     body('type').isIn(['PERCENTAGE', 'FIXED_AMOUNT']),
-    body('amount').isInt({ min: 1 }),
+    body('amount').isInt({ min: 1 }).toInt(),
 ], async (req, res) => {
     try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
         const { eventId } = req.params;
         const { code, type, amount, maxUses, validFrom, validUntil } = req.body;
-        const parsedAmount = parseInt(amount, 10);
-        const storedAmount = type === 'FIXED_AMOUNT' ? parsedAmount * 100 : parsedAmount;
+        const parsedMaxUses = parseNullableIntegerInput(maxUses, 'maxUses', 1);
+        const parsedValidFrom = parseNullableDateInput(validFrom, 'validFrom');
+        const parsedValidUntil = parseNullableDateInput(validUntil, 'validUntil');
+        if (parsedValidFrom && parsedValidUntil && parsedValidFrom > parsedValidUntil) {
+            throw routeInputError('validUntil must be after validFrom');
+        }
+        const storedAmount = normalizeDiscountAmountForStorage(type, amount);
 
         const event = await prisma.event.findUnique({ where: { id: eventId } });
         if (!event) return res.status(404).json({ error: 'Event not found' });
@@ -85,9 +118,9 @@ router.post('/events/:eventId', [
                 code,
                 type,
                 amount: storedAmount,
-                maxUses: maxUses ? parseInt(maxUses, 10) : null,
-                validFrom: validFrom ? new Date(validFrom) : null,
-                validUntil: validUntil ? new Date(validUntil) : null
+                maxUses: parsedMaxUses,
+                validFrom: parsedValidFrom,
+                validUntil: parsedValidUntil
             }
         });
 
@@ -95,7 +128,9 @@ router.post('/events/:eventId', [
     } catch (error) {
         console.error(error);
         if (error.code === 'P2002') return res.status(400).json({ error: 'Code already exists for this event' });
-        res.status(500).json({ error: 'Failed to create code' });
+        res.status(error.statusCode || 500).json({
+            error: error.statusCode ? error.message : 'Failed to create code'
+        });
     }
 });
 

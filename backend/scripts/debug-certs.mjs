@@ -1,5 +1,19 @@
 import { PrismaClient } from '@prisma/client';
+import { formatDebugUrl, requireDebugScript } from './debug-guard.mjs';
+
+requireDebugScript({ name: 'debug-certs' });
+
 const p = new PrismaClient();
+
+const redactConfigUrls = (configs = {}) => Object.fromEntries(
+  Object.entries(configs).map(([type, config]) => [
+    type,
+    {
+      ...config,
+      templateUrl: formatDebugUrl(config?.templateUrl)
+    }
+  ])
+);
 
 // Check certificate configs
 const events = await p.event.findMany({
@@ -19,8 +33,8 @@ for (const e of events) {
       id: e.id,
       title: e.title,
       enabled: e.certificateEnabled,
-      templateUrl: e.certificateTemplateUrl,
-      configs: e.certificateConfigs,
+      templateUrl: formatDebugUrl(e.certificateTemplateUrl),
+      configs: redactConfigUrls(e.certificateConfigs || {}),
       mappingCount: Array.isArray(e.certificateMapping) ? e.certificateMapping.length : 0
     }, null, 2));
   }

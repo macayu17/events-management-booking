@@ -7,7 +7,7 @@ Backend API for Event Management and Booking System built with Node.js, Express,
 - 🔐 JWT Authentication
 - 📅 Event Management (CRUD)
 - 📝 Custom Registration Forms
-- 💳 Payment Integration (Razorpay + PhonePe; Stripe remains a legacy placeholder)
+- 💳 Payment Integration (Razorpay + PhonePe)
 - 🎟️ QR Ticket Generation
 - 📧 Email Notifications
 - 🔄 Background Job Processing
@@ -30,7 +30,7 @@ Backend API for Event Management and Booking System built with Node.js, Express,
 
 ### Prerequisites
 
-- Node.js (v18 or higher)
+- Node.js (v22.12 or higher)
 - PostgreSQL
 - Redis (for background jobs)
 - AWS Account (for production)
@@ -94,6 +94,7 @@ See `.env.example` for all required environment variables.
 ### Webhooks
 - `POST /api/webhooks/payments` - Razorpay webhook
 - `POST /api/orders/:id/verify-phonepe` - PhonePe redirect verification
+- `npm run payments:reconcile-phonepe -- --limit=25 --min-age-minutes=5` - Reconcile stale PhonePe orders from the provider status API
 
 ### Tickets
 - `POST /api/tickets/verify` - Verify ticket QR code
@@ -133,8 +134,11 @@ npm run dev
 # Access Prisma Studio
 npm run prisma:studio
 
-# Run migrations
-npm run prisma:migrate
+# Create/apply local migrations
+npm run prisma:migrate:dev
+
+# Apply committed migrations in production/CI
+npm run prisma:migrate:deploy
 ```
 
 ## Production Deployment
@@ -142,9 +146,25 @@ npm run prisma:migrate
 1. Set `NODE_ENV=production`
 2. Configure production database
 3. Set up Redis instance
-4. Configure Cloudflare R2 for generated PDF assets and Cloudinary as fallback
+4. Configure Cloudinary or S3 for poster uploads, and R2, Cloudinary, or S3 for generated PDF assets. Production fails at startup instead of using local disk when cloud storage is missing.
 5. Set up Razorpay and PhonePe credentials/webhooks as needed. Sandbox PhonePe uses Standard Checkout V2 credentials: `PHONEPE_CLIENT_ID`, `PHONEPE_CLIENT_SECRET`, and `PHONEPE_CLIENT_VERSION`; no gateway credentials are hardcoded in the app.
-6. Deploy to Azure App Service
+6. For Azure, set `AZURE_RUN_PRISMA_MIGRATIONS=true` and `AZURE_DATABASE_URL` only when you want the workflow or startup script to run `npm run prisma:migrate:deploy`. The workflow runs backend tests before migrations.
+7. Deploy to Azure App Service
+
+## Maintenance Helpers
+
+```bash
+# List recent tickets and compare DB/QR ticket IDs
+npm run tickets:check
+
+# Promote an existing user to ADMIN
+ADMIN_EMAIL=user@example.com CONFIRM_ADMIN_EMAIL=user@example.com npm run admin:set
+
+# Reconcile stale PhonePe orders when a customer paid but missed the browser callback
+npm run payments:reconcile-phonepe -- --limit=25 --min-age-minutes=5
+```
+
+Diagnostic scripts under `scripts/debug-*.mjs` require `ALLOW_DEBUG_SCRIPTS=true` because they can print local database or provider data. See `scripts/README.md` before running them.
 
 ## License
 

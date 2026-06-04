@@ -1,6 +1,6 @@
 import express from 'express';
 import prisma from '../config/db.js';
-import { verifyRazorpaySignature } from '../services/payment.service.js';
+import { verifyRazorpayWebhookSignature } from '../services/payment.service.js';
 import { completePaidOrder } from '../services/order-completion.service.js';
 
 const router = express.Router();
@@ -12,7 +12,7 @@ router.post('/payments', async (req, res) => {
     const body = req.body;
 
     // Verify signature
-    const isValid = verifyRazorpaySignature(body, signature);
+    const isValid = verifyRazorpayWebhookSignature(body, signature);
 
     if (!isValid) {
       return res.status(400).json({ error: 'Invalid signature' });
@@ -21,10 +21,20 @@ router.post('/payments', async (req, res) => {
     const event = JSON.parse(body.toString());
 
     if (event.event === 'payment.captured') {
-      const orderId = event.payload.payment.entity.order_id;
+      const payment = event.payload.payment.entity;
+      const orderId = payment.order_id;
+      if (!orderId) {
+        return res.status(400).json({ error: 'Webhook payment is missing order id' });
+      }
+
       // Find order
-      const order = await prisma.order.findFirst({
-        where: { providerOrderId: orderId }
+      const order = await prisma.order.findUnique({
+        where: {
+          provider_providerOrderId: {
+            provider: 'RAZORPAY',
+            providerOrderId: orderId
+          }
+        }
       });
 
       if (!order) {
@@ -32,8 +42,25 @@ router.post('/payments', async (req, res) => {
         return res.status(404).json({ error: 'Order not found' });
       }
 
+      if (
+        order.provider !== 'RAZORPAY' ||
+        order.amountCents !== payment.amount ||
+        order.currency !== payment.currency
+      ) {
+        return res.status(400).json({ error: 'Webhook payment does not match order' });
+      }
+
+      if (order.status === 'PAID') {
+        return res.json({ received: true, alreadyProcessed: true });
+      }
+
+      if (order.status === 'FAILED') {
+        console.error('Captured payment ignored because local order is failed:', orderId);
+        return res.json({ received: true, ignored: true, reason: 'order_failed' });
+      }
+
       await completePaidOrder(order.id, {
-        razorpayWebhook: event.payload.payment.entity
+        razorpayWebhook: payment
       });
 
       console.log('Payment processed successfully:', orderId);
@@ -46,13 +73,6 @@ router.post('/payments', async (req, res) => {
       error: error.statusCode ? error.message : 'Webhook processing failed'
     });
   }
-});
-
-// Stripe webhook (alternative)
-router.post('/stripe', (req, res) => {
-  res.status(501).json({
-    error: 'Stripe webhooks are not implemented. Use Razorpay or PhonePe for payments.'
-  });
 });
 
 export default router;

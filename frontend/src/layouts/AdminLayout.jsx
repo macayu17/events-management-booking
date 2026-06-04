@@ -47,8 +47,20 @@ export default function AdminLayout() {
     }
   }, [user, isAdmin]);
 
+  useEffect(() => {
+    if (!sidebarOpen) return undefined;
+
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') setSidebarOpen(false);
+    };
+
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [sidebarOpen]);
+
   // Show full sidebar for admin OR users with their own events
   const showOrganizerItems = isAdmin || hasOwnEvents;
+  const navAccessLoading = !isAdmin && hasOwnEvents === null;
 
   // Navigation items - filtered based on whether user owns events
   const allNavigation = [
@@ -56,7 +68,7 @@ export default function AdminLayout() {
     { name: 'Events', href: '/admin/events', icon: Calendar, requiresOwnEvents: true },
     { name: 'Team Events', href: '/admin/team-events', icon: Users, requiresOwnEvents: false },
     { name: 'Financials', href: '/admin/financials', icon: BarChart3, requiresOwnEvents: true },
-    { name: 'Scanner', href: '/scanner', icon: QrCode, requiresOwnEvents: false },
+    { name: 'Scanner', href: '/scanner', icon: QrCode, requiresOwnEvents: true },
   ];
 
   // Filter navigation based on whether user has own events
@@ -64,17 +76,30 @@ export default function AdminLayout() {
     !item.requiresOwnEvents || showOrganizerItems
   );
 
-  const isActive = (path) => location.pathname === path;
+  const isActive = (item) => {
+    if (item.href === '/admin') return location.pathname === '/admin';
+    if (item.href === '/admin/events') return location.pathname.startsWith('/admin/events');
+    return location.pathname === item.href;
+  };
 
   // Determine branding
   const isTeamOnlyUser = !showOrganizerItems && hasOwnEvents === false;
 
   return (
     <div className="admin-shell min-h-screen selection:bg-[#E23744] selection:text-white">
+      <a
+        href="#admin-main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[70] focus:rounded-xl focus:bg-[#f2e7d8] focus:px-4 focus:py-2 focus:text-sm focus:font-black focus:text-[#17110d]"
+      >
+        Skip to admin content
+      </a>
+
       {/* Mobile sidebar backdrop */}
       {sidebarOpen && (
-        <div
-          className="fixed inset-0 bg-black/80 backdrop-blur-sm z-40 lg:hidden"
+        <button
+          type="button"
+          aria-label="Close sidebar backdrop"
+          className="fixed inset-0 z-40 cursor-default bg-black/80 backdrop-blur-sm lg:hidden"
           onClick={() => setSidebarOpen(false)}
         />
       )}
@@ -106,9 +131,15 @@ export default function AdminLayout() {
 
           {/* Navigation */}
           <nav className="flex-1 space-y-2 overflow-y-auto px-2 py-7">
+            {navAccessLoading && (
+              <div className="mx-2 mb-3 rounded-2xl border border-white/10 bg-white/[0.035] px-4 py-3 text-sm font-semibold text-[#aca39a]" role="status">
+                Checking organizer access...
+              </div>
+            )}
+
             {navigation.map((item) => {
               const Icon = item.icon;
-              const active = isActive(item.href);
+              const active = isActive(item);
               return (
                 <Link
                   key={item.name}
@@ -125,6 +156,7 @@ export default function AdminLayout() {
             <a
               href="/"
               target="_blank"
+              rel="noopener noreferrer"
               className="admin-nav-link admin-nav-link-idle"
               onClick={() => setSidebarOpen(false)}
             >
@@ -160,6 +192,7 @@ export default function AdminLayout() {
                 onClick={logout}
                 className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
                 title="Logout"
+                aria-label="Logout"
               >
                 <LogOut size={18} />
               </button>
@@ -179,7 +212,7 @@ export default function AdminLayout() {
         </button>
 
         {/* Page content */}
-        <main className="p-4 pt-20 lg:p-8">
+        <main id="admin-main-content" className="p-4 pt-20 lg:p-8">
           <Outlet />
         </main>
       </div>

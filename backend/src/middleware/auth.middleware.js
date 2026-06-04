@@ -107,6 +107,10 @@ export const checkEventAccess = async (user, eventId, requiredRoles = []) => {
     return { hasAccess: false, error: 'Not authorized' };
   }
 
+  if (!teamMember.acceptedAt) {
+    return { hasAccess: false, error: 'Invitation has not been accepted' };
+  }
+
   // If specific roles required, check them
   if (requiredRoles.length > 0 && !requiredRoles.includes(teamMember.role)) {
     return { hasAccess: false, error: 'Insufficient permissions', teamRole: teamMember.role };

@@ -52,19 +52,49 @@ export async function createRazorpayOrder(order) {
   }
 }
 
-export function verifyRazorpaySignature(body, signature) {
+export async function fetchRazorpayOrder(providerOrderId) {
   try {
-    if (!isPresent(process.env.RAZORPAY_KEY_SECRET)) {
-      console.warn('Razorpay webhook verification skipped because RAZORPAY_KEY_SECRET is not configured');
+    if (!isPresent(providerOrderId)) {
+      throw configError('Razorpay provider order id is required.');
+    }
+
+    return await getRazorpayClient().orders.fetch(providerOrderId);
+  } catch (error) {
+    logOperationalError('Razorpay order fetch error:', error);
+    throw error;
+  }
+}
+
+export async function fetchRazorpayOrderPayments(providerOrderId) {
+  try {
+    if (!isPresent(providerOrderId)) {
+      throw configError('Razorpay provider order id is required.');
+    }
+
+    return await getRazorpayClient().orders.fetchPayments(providerOrderId);
+  } catch (error) {
+    logOperationalError('Razorpay order payments fetch error:', error);
+    throw error;
+  }
+}
+
+export function verifyRazorpayWebhookSignature(body, signature) {
+  try {
+    if (!isPresent(process.env.RAZORPAY_WEBHOOK_SECRET)) {
+      console.warn('Razorpay webhook verification skipped because RAZORPAY_WEBHOOK_SECRET is not configured');
       return false;
     }
 
     const expectedSignature = crypto
-      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .createHmac('sha256', process.env.RAZORPAY_WEBHOOK_SECRET)
       .update(body.toString())
       .digest('hex');
 
-    return expectedSignature === signature;
+    const expectedBuffer = Buffer.from(expectedSignature, 'hex');
+    const providedBuffer = Buffer.from(String(signature || ''), 'hex');
+
+    return expectedBuffer.length === providedBuffer.length
+      && crypto.timingSafeEqual(expectedBuffer, providedBuffer);
   } catch (error) {
     console.error('Signature verification error:', error);
     return false;
@@ -122,8 +152,12 @@ function getPhonePeCredentials() {
 }
 
 function getPhonePeConfig() {
-  const env = process.env.PHONEPE_ENV || 'sandbox';
-  return PHONEPE_CONFIG[env] || PHONEPE_CONFIG.sandbox;
+  const env = process.env.PHONEPE_ENV || (process.env.NODE_ENV === 'production' ? 'production' : 'sandbox');
+  if (!PHONEPE_CONFIG[env]) {
+    throw configError('PHONEPE_ENV must be one of: sandbox, production.');
+  }
+
+  return PHONEPE_CONFIG[env];
 }
 
 function buildPhonePeMerchantOrderId(orderId) {
@@ -150,6 +184,17 @@ function phonePeGatewayError(message, responseData) {
 
 function phonePeMessage(responseData, fallback) {
   return responseData?.message || responseData?.code || responseData?.state || fallback;
+}
+
+function phonePeResponseSummary(responseData = {}) {
+  return {
+    success: responseData.success,
+    code: responseData.code,
+    state: responseData.state,
+    message: responseData.message,
+    orderId: responseData.orderId || responseData.data?.merchantTransactionId,
+    amount: responseData.amount || responseData.data?.amount
+  };
 }
 
 async function fetchPhonePeV2Token(creds) {
@@ -198,12 +243,6 @@ async function createPhonePeV2Payment(order, callbackUrl, creds) {
     }
   };
 
-  console.log('PhonePe V2 payment request:', {
-    merchantOrderId,
-    amount: order.amountCents,
-    env: process.env.PHONEPE_ENV || 'sandbox'
-  });
-
   const response = await fetch(`${getPhonePeConfig().pgBaseUrl}/checkout/v2/pay`, {
     method: 'POST',
     headers: {
@@ -215,7 +254,7 @@ async function createPhonePeV2Payment(order, callbackUrl, creds) {
   const data = await readPhonePeResponse(response);
 
   if (!response.ok || !data.redirectUrl) {
-    console.error('PhonePe V2 payment initiation failed:', data);
+    console.error('PhonePe V2 payment initiation failed:', phonePeResponseSummary(data));
     throw phonePeGatewayError(`PhonePe payment initiation failed: ${phonePeMessage(data, 'No redirect URL returned')}`, data);
   }
 
@@ -253,13 +292,6 @@ async function createPhonePeLegacyPayment(order, callbackUrl, creds) {
   const endpoint = '/pg/v1/pay';
   const checksum = generatePhonePeChecksum(base64Payload, endpoint, creds.saltKey, creds.saltIndex);
 
-  console.log('PhonePe legacy payment request:', {
-    merchantId: creds.merchantId,
-    merchantTransactionId,
-    amount: order.amountCents,
-    env: process.env.PHONEPE_ENV || 'sandbox'
-  });
-
   const response = await fetch(`${getPhonePeConfig().legacyBaseUrl}${endpoint}`, {
     method: 'POST',
     headers: {
@@ -280,7 +312,7 @@ async function createPhonePeLegacyPayment(order, callbackUrl, creds) {
     };
   }
 
-  console.error('PhonePe legacy payment initiation failed:', data);
+  console.error('PhonePe legacy payment initiation failed:', phonePeResponseSummary(data));
   throw phonePeGatewayError(`PhonePe payment initiation failed: ${phonePeMessage(data, 'No redirect URL returned')}`, data);
 }
 
@@ -309,7 +341,6 @@ async function checkPhonePeV2PaymentStatus(merchantOrderId, creds) {
     }
   });
   const data = await readPhonePeResponse(response);
-  console.log('PhonePe V2 status check response:', data);
 
   if (!response.ok) {
     throw phonePeGatewayError(`PhonePe status check failed: ${phonePeMessage(data, response.statusText)}`, data);
@@ -319,7 +350,7 @@ async function checkPhonePeV2PaymentStatus(merchantOrderId, creds) {
     success: data.state === 'COMPLETED',
     code: data.state,
     transactionId: data.orderId,
-    merchantTransactionId: merchantOrderId,
+    merchantTransactionId: data.merchantOrderId || data.merchantTransactionId || null,
     amount: data.amount,
     paymentState: data.state,
     paymentInstrument: data.paymentDetails || data.paymentInstrument,
@@ -343,7 +374,6 @@ async function checkPhonePeLegacyPaymentStatus(merchantTransactionId, creds) {
   });
 
   const data = await readPhonePeResponse(response);
-  console.log('PhonePe legacy status check response:', data);
 
   if (!response.ok) {
     throw phonePeGatewayError(`PhonePe status check failed: ${phonePeMessage(data, response.statusText)}`, data);

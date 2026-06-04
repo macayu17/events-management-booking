@@ -40,7 +40,7 @@ const streamToBuffer = async (body) => {
   return Buffer.concat(chunks);
 };
 
-const parseR2Ref = (templateRef) => {
+export const parseR2Ref = (templateRef) => {
   if (!templateRef) return null;
 
   if (templateRef.startsWith('r2://')) {
@@ -65,7 +65,30 @@ const parseR2Ref = (templateRef) => {
   }
 };
 
-export const isR2TemplateRef = (templateRef) => Boolean(parseR2Ref(templateRef));
+const getAllowedR2Ref = (templateRef, { allowedPrefixes = [] } = {}) => {
+  const parsed = parseR2Ref(templateRef);
+  if (!parsed) return null;
+
+  if (process.env.R2_BUCKET && parsed.bucket !== process.env.R2_BUCKET) {
+    return null;
+  }
+
+  if (allowedPrefixes.length > 0 && !allowedPrefixes.some((prefix) => parsed.key.startsWith(prefix))) {
+    return null;
+  }
+
+  return parsed;
+};
+
+export const isR2ObjectRef = (templateRef, options = {}) => Boolean(getAllowedR2Ref(templateRef, options));
+
+export const isR2TemplateRef = (templateRef) => isR2ObjectRef(templateRef, {
+  allowedPrefixes: ['certificates/templates/'],
+});
+
+export const isR2TicketPdfRef = (templateRef) => isR2ObjectRef(templateRef, {
+  allowedPrefixes: ['tickets/'],
+});
 
 export const uploadBufferToR2 = async ({ buffer, key, contentType = 'application/octet-stream' }) => {
   const s3 = getR2Client();
@@ -81,8 +104,8 @@ export const uploadBufferToR2 = async ({ buffer, key, contentType = 'application
   return `r2://${bucket}/${key}`;
 };
 
-export const getR2ObjectBuffer = async (templateRef) => {
-  const parsed = parseR2Ref(templateRef);
+export const getR2ObjectBuffer = async (templateRef, options = {}) => {
+  const parsed = getAllowedR2Ref(templateRef, options);
   if (!parsed) {
     throw new Error('Invalid R2 template reference');
   }

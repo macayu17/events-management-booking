@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
+import { ErrorState, LoadingBlock } from '../../components/StateBlock';
+import useConfirmDialog from '../../hooks/useConfirmDialog';
+import FormFieldEditor, { getFieldEditorKey } from './FormFieldEditor';
 
 const FIELD_TYPES = [
   { value: 'text', label: 'Text' },
@@ -13,41 +16,89 @@ const FIELD_TYPES = [
   { value: 'textarea', label: 'Text Area' }
 ];
 
+const DEFAULT_FIELDS = [
+  { key: 'name', type: 'text', label: 'Full Name', required: true },
+  { key: 'email', type: 'email', label: 'Email', required: true },
+  { key: 'phone', type: 'tel', label: 'Phone Number', required: false }
+];
+
+const serializeFields = (value) => JSON.stringify(value);
+
+const createFieldEditorKeys = (fieldList) => {
+  const seen = new Map();
+
+  return fieldList.map((field, index) => {
+    const baseKey = getFieldEditorKey(field, index);
+    const count = seen.get(baseKey) || 0;
+    seen.set(baseKey, count + 1);
+
+    return count === 0 ? baseKey : `${baseKey}-${count + 1}`;
+  });
+};
+
 export default function FormBuilderPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const [fields, setFields] = useState([
-    { key: 'name', type: 'text', label: 'Full Name', required: true },
-    { key: 'email', type: 'email', label: 'Email', required: true }
-  ]);
+  const [fields, setFields] = useState(DEFAULT_FIELDS);
+  const [fieldEditorKeys, setFieldEditorKeys] = useState(() => createFieldEditorKeys(DEFAULT_FIELDS));
+  const [initialSnapshot, setInitialSnapshot] = useState(serializeFields(DEFAULT_FIELDS));
+  const [fetchLoading, setFetchLoading] = useState(true);
+  const [fetchError, setFetchError] = useState('');
   const [loading, setLoading] = useState(false);
+  const { confirm, dialog } = useConfirmDialog();
 
   useEffect(() => {
     fetchForm();
   }, [id]);
 
+  const hasUnsavedChanges = serializeFields(fields) !== initialSnapshot;
+
+  useEffect(() => {
+    if (!hasUnsavedChanges) return undefined;
+
+    const handleBeforeUnload = (event) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [hasUnsavedChanges]);
+
   const fetchForm = async () => {
+    setFetchLoading(true);
+    setFetchError('');
+
     try {
-      const response = await api.get(`/events/${id}/form`);
-      if (response.data?.schemaJson?.fields) {
-        setFields(response.data.schemaJson.fields);
-      }
+      const response = await api.get(`/admin/events/${id}`);
+      const savedFields = response.data?.form?.schemaJson?.fields;
+      const nextFields = Array.isArray(savedFields) && savedFields.length > 0
+        ? savedFields
+        : DEFAULT_FIELDS;
+
+      setFields(nextFields);
+      setFieldEditorKeys(createFieldEditorKeys(nextFields));
+      setInitialSnapshot(serializeFields(nextFields));
     } catch (error) {
-      // Form doesn't exist yet, use defaults
-      console.log('No form found, using defaults');
+      setFetchError(error.response?.data?.error || 'Failed to load this event form');
+    } finally {
+      setFetchLoading(false);
     }
   };
 
   const addField = () => {
-    setFields([
-      ...fields,
-      {
-        key: `field_${Date.now()}`,
-        type: 'text',
-        label: 'New Field',
-        required: false,
-        options: []
-      }
+    const newField = {
+      key: `field_${Date.now()}`,
+      type: 'text',
+      label: 'New Field',
+      required: false,
+      options: []
+    };
+
+    setFields((currentFields) => [...currentFields, newField]);
+    setFieldEditorKeys((currentKeys) => [
+      ...currentKeys,
+      getFieldEditorKey(newField, currentKeys.length)
     ]);
   };
 
@@ -58,7 +109,8 @@ export default function FormBuilderPage() {
   };
 
   const removeField = (index) => {
-    setFields(fields.filter((_, i) => i !== index));
+    setFields((currentFields) => currentFields.filter((_, i) => i !== index));
+    setFieldEditorKeys((currentKeys) => currentKeys.filter((_, i) => i !== index));
   };
 
   const handleSave = async () => {
@@ -74,130 +126,90 @@ export default function FormBuilderPage() {
       };
 
       await api.post(`/admin/events/${id}/form`, { schemaJson });
+      setInitialSnapshot(serializeFields(schemaJson.fields));
       toast.success('Form saved successfully!');
       navigate('/admin/events');
     } catch (error) {
-      toast.error('Failed to save form');
+      toast.error(error.response?.data?.error || 'Failed to save form');
     } finally {
       setLoading(false);
     }
   };
 
+  const handleCancel = async () => {
+    if (hasUnsavedChanges) {
+      const confirmed = await confirm({
+        title: 'Discard form changes?',
+        message: 'Unsaved registration fields will be lost.',
+        confirmLabel: 'Discard changes',
+        tone: 'warning',
+      });
+      if (!confirmed) return;
+    }
+    navigate('/admin/events');
+  };
+
+  if (fetchLoading) {
+    return <LoadingBlock title="Loading form" message="Fetching the saved registration schema." />;
+  }
+
+  if (fetchError) {
+    return (
+      <ErrorState
+        title="Could not load form"
+        message={fetchError}
+        action={(
+          <button type="button" onClick={fetchForm} className="admin-primary-action inline-flex">
+            Retry
+          </button>
+        )}
+      />
+    );
+  }
+
   return (
-    <div className="max-w-4xl">
-      <h1 className="text-3xl font-bold mb-8">Form Builder</h1>
+    <div className="max-w-4xl min-w-0">
+      {dialog}
+      <div className="mb-8 min-w-0">
+        <h1 className="break-words text-3xl font-bold text-[#f7efe3]">Form Builder</h1>
+      </div>
 
       <div className="space-y-6">
         {fields.map((field, index) => (
-          <div key={index} className="card">
-            <div className="flex justify-between items-start mb-4">
-              <h3 className="font-semibold text-lg">Field {index + 1}</h3>
-              {fields.length > 2 && (
-                <button
-                  onClick={() => removeField(index)}
-                  className="text-red-500 hover:text-red-700"
-                >
-                  <Trash2 size={20} />
-                </button>
-              )}
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Field Key (unique identifier)
-                </label>
-                <input
-                  type="text"
-                  value={field.key}
-                  onChange={(e) => updateField(index, { key: e.target.value })}
-                  className="input"
-                  disabled={index < 2} // Don't allow changing name and email keys
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Field Type
-                </label>
-                <select
-                  value={field.type}
-                  onChange={(e) => updateField(index, { type: e.target.value })}
-                  className="input"
-                >
-                  {FIELD_TYPES.map(type => (
-                    <option key={type.value} value={type.value}>
-                      {type.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Field Label
-                </label>
-                <input
-                  type="text"
-                  value={field.label}
-                  onChange={(e) => updateField(index, { label: e.target.value })}
-                  className="input"
-                />
-              </div>
-
-              <div>
-                <label className="flex items-center space-x-2 mt-8">
-                  <input
-                    type="checkbox"
-                    checked={field.required}
-                    onChange={(e) => updateField(index, { required: e.target.checked })}
-                    className="rounded"
-                  />
-                  <span className="text-sm font-medium text-gray-700">Required</span>
-                </label>
-              </div>
-            </div>
-
-            {field.type === 'select' && (
-              <div className="mt-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Options (comma-separated)
-                </label>
-                <input
-                  type="text"
-                  value={field.options?.join(', ') || ''}
-                  onChange={(e) =>
-                    updateField(index, {
-                      options: e.target.value.split(',').map(o => o.trim()).filter(Boolean)
-                    })
-                  }
-                  className="input"
-                  placeholder="Option 1, Option 2, Option 3"
-                />
-              </div>
-            )}
-          </div>
+          <FormFieldEditor
+            key={fieldEditorKeys[index] || getFieldEditorKey(field, index)}
+            editorKey={fieldEditorKeys[index] || getFieldEditorKey(field, index)}
+            field={field}
+            index={index}
+            fieldTypes={FIELD_TYPES}
+            canRemove={fields.length > 2}
+            onUpdate={(updates) => updateField(index, updates)}
+            onRemove={() => removeField(index)}
+          />
         ))}
 
         <button
+          type="button"
           onClick={addField}
-          className="btn btn-secondary w-full"
+          className="admin-primary-action flex w-full items-center justify-center"
         >
           <Plus size={20} className="mr-2" />
           Add Field
         </button>
 
-        <div className="flex gap-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           <button
+            type="button"
             onClick={handleSave}
             disabled={loading}
-            className="btn btn-primary disabled:opacity-50"
+            className="admin-primary-action inline-flex items-center justify-center disabled:cursor-not-allowed disabled:opacity-50"
           >
             {loading ? 'Saving...' : 'Save Form'}
           </button>
           <button
-            onClick={() => navigate('/admin/events')}
-            className="btn btn-secondary"
+            type="button"
+            onClick={handleCancel}
+            className="inline-flex items-center justify-center rounded-full border border-white/10 bg-white/[0.04] px-5 py-3 text-sm font-bold text-[#d9d0c6] transition-all hover:border-[#f2e7d8]/30 hover:bg-[#f2e7d8] hover:text-[#17110d] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0b0a09]"
           >
             Cancel
           </button>

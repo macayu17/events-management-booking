@@ -1,44 +1,30 @@
 import express from 'express';
+import { createEvent } from 'ics';
 import prisma from '../config/db.js';
+import { buildEventListWhere } from '../utils/event-query.util.js';
+import { DEFAULT_FORM_SCHEMA } from '../utils/form-schema.util.js';
 
 const router = express.Router();
+
+const sendRouteError = (res, error, fallbackMessage) => {
+  res.status(error.statusCode || 500).json({
+    error: error.statusCode ? error.message : fallbackMessage
+  });
+};
+
+const logRouteError = (message, error) => {
+  if (error.statusCode && error.statusCode < 500) {
+    console.warn(`${message}: ${error.message}`);
+    return;
+  }
+
+  console.error(`${message}:`, error);
+};
 
 // Get all published events with filters
 router.get('/', async (req, res) => {
   try {
-    const { search, upcoming, category, tag, startDate, endDate } = req.query;
-
-    const where = {
-      published: true,
-      // Text search across title, description, location
-      ...(search && {
-        OR: [
-          { title: { contains: search, mode: 'insensitive' } },
-          { description: { contains: search, mode: 'insensitive' } },
-          { location: { contains: search, mode: 'insensitive' } },
-          { tags: { has: search } }
-        ]
-      }),
-      // Filter by category
-      ...(category && category !== 'ALL' && {
-        category: category
-      }),
-      // Filter by tag
-      ...(tag && {
-        tags: { has: tag }
-      }),
-      // Upcoming events only
-      ...(upcoming === 'true' && {
-        startTime: { gte: new Date() }
-      }),
-      // Date range filter
-      ...(startDate && {
-        startTime: { gte: new Date(startDate) }
-      }),
-      ...(endDate && {
-        endTime: { lte: new Date(endDate) }
-      })
-    };
+    const where = buildEventListWhere(req.query);
 
     const events = await prisma.event.findMany({
       where,
@@ -76,8 +62,8 @@ router.get('/', async (req, res) => {
 
     res.json(events);
   } catch (error) {
-    console.error('Get events error:', error);
-    res.status(500).json({ error: 'Failed to fetch events' });
+    logRouteError('Get events error', error);
+    sendRouteError(res, error, 'Failed to fetch events');
   }
 });
 
@@ -98,13 +84,11 @@ router.get('/meta/categories', async (req, res) => {
   res.json(categories);
 });
 
-import { createEvent } from 'ics';
-
 // Download ICS
 router.get('/:id/calendar', async (req, res) => {
   try {
-    const event = await prisma.event.findUnique({
-      where: { id: req.params.id }
+    const event = await prisma.event.findFirst({
+      where: { id: req.params.id, published: true }
     });
 
     if (!event) {
@@ -187,23 +171,25 @@ router.get('/:identifier', async (req, res) => {
 // Get event form
 router.get('/:id/form', async (req, res) => {
   try {
+    const event = await prisma.event.findFirst({
+      where: { id: req.params.id, published: true },
+      select: { id: true }
+    });
+
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
     let form = await prisma.form.findUnique({
-      where: { eventId: req.params.id }
+      where: { eventId: event.id }
     });
 
     // If no form exists, return a default form
     if (!form) {
       const defaultForm = {
         id: 'default',
-        eventId: req.params.id,
-        schemaJson: {
-          title: 'Registration Form',
-          fields: [
-            { key: 'name', type: 'text', label: 'Full Name', required: true },
-            { key: 'email', type: 'email', label: 'Email', required: true },
-            { key: 'phone', type: 'tel', label: 'Phone Number', required: false }
-          ]
-        },
+        eventId: event.id,
+        schemaJson: DEFAULT_FORM_SCHEMA,
         createdAt: new Date()
       };
       return res.json(defaultForm);

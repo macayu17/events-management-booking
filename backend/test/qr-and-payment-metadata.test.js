@@ -1,10 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getTicketTierIdFromPaymentData, mergePaymentData } from '../src/utils/payment-metadata.util.js';
+import {
+  buildCheckoutReservation,
+  getCheckoutReservation,
+  getTicketTierIdFromPaymentData,
+  hasProviderHandoffMetadata,
+  hasActiveCheckoutReservation,
+  isCheckoutReservationExpired,
+  markCheckoutReservationConsumed,
+  markCheckoutReservationReleased,
+  mergePaymentData
+} from '../src/utils/payment-metadata.util.js';
 import {
   buildTicketTierSnapshot,
   calculateDiscountedAmountCents,
+  hasValidDiscountAmount,
   isDiscountUsable,
+  normalizeDiscountAmountForStorage,
   normalizeDiscountCode,
   resolveSelectedTicketTier,
 } from '../src/utils/registration-pricing.util.js';
@@ -91,6 +103,61 @@ test('payment metadata helpers tolerate empty or invalid metadata', () => {
   assert.equal(getTicketTierIdFromPaymentData([]), null);
 });
 
+test('checkout reservation metadata records and releases payment holds', () => {
+  const now = new Date('2026-06-03T12:00:00.000Z');
+  const reservation = buildCheckoutReservation({
+    eventId: 'event-1',
+    ticketTierId: 'tier-1',
+    discountCodeId: 'discount-1',
+    now,
+    ttlMs: 20 * 60 * 1000,
+  });
+
+  const paymentData = mergePaymentData(
+    { ticketTier: { id: 'tier-1', name: 'VIP', priceCents: 50000 } },
+    { checkoutReservation: reservation }
+  );
+
+  assert.equal(getCheckoutReservation(paymentData).status, 'ACTIVE');
+  assert.equal(hasActiveCheckoutReservation(paymentData, new Date('2026-06-03T12:19:59.000Z')), true);
+  assert.equal(hasActiveCheckoutReservation(paymentData, new Date('2026-06-03T12:20:01.000Z')), true);
+  assert.equal(isCheckoutReservationExpired(paymentData, new Date('2026-06-03T12:19:59.000Z')), false);
+  assert.equal(isCheckoutReservationExpired(paymentData, new Date('2026-06-03T12:20:01.000Z')), true);
+
+  const released = markCheckoutReservationReleased(paymentData, new Date('2026-06-03T12:10:00.000Z'));
+  assert.equal(getCheckoutReservation(released).status, 'RELEASED');
+  assert.equal(hasActiveCheckoutReservation(released, now), false);
+  assert.equal(isCheckoutReservationExpired(released, new Date('2026-06-03T12:20:01.000Z')), false);
+  assert.equal(released.ticketTier.id, 'tier-1');
+
+  const consumed = markCheckoutReservationConsumed(paymentData, new Date('2026-06-03T12:11:00.000Z'));
+  assert.equal(getCheckoutReservation(consumed).status, 'CONSUMED');
+  assert.equal(hasActiveCheckoutReservation(consumed, now), false);
+  assert.equal(consumed.ticketTier.id, 'tier-1');
+});
+
+test('provider handoff metadata detects started payment sessions', () => {
+  assert.equal(hasProviderHandoffMetadata(null), false);
+  assert.equal(hasProviderHandoffMetadata({ phonePe: {} }), false);
+  assert.equal(hasProviderHandoffMetadata({ razorpayOrder: {} }), false);
+
+  assert.equal(hasProviderHandoffMetadata({
+    phonePe: {
+      paymentUrl: 'https://payment.example/checkout',
+    },
+  }), true);
+  assert.equal(hasProviderHandoffMetadata({
+    phonePe: {
+      transactionId: 'txn-1',
+    },
+  }), true);
+  assert.equal(hasProviderHandoffMetadata({
+    razorpayOrder: {
+      id: 'order_123',
+    },
+  }), true);
+});
+
 test('R2 references are detected and image uploads do not use R2-only memory storage', async () => {
   process.env.R2_ACCOUNT_ID = 'account';
   process.env.R2_ACCESS_KEY_ID = 'access-key';
@@ -99,8 +166,10 @@ test('R2 references are detected and image uploads do not use R2-only memory sto
   process.env.R2_ENDPOINT = 'https://account.r2.cloudflarestorage.com';
 
   const { isR2TemplateRef } = await import('../src/utils/r2.util.js');
-  assert.equal(isR2TemplateRef('r2://bucket/certificates/template.pdf'), true);
-  assert.equal(isR2TemplateRef('https://account.r2.cloudflarestorage.com/bucket/certificates/template.pdf'), true);
+  assert.equal(isR2TemplateRef('r2://bucket/certificates/templates/template.pdf'), true);
+  assert.equal(isR2TemplateRef('https://account.r2.cloudflarestorage.com/bucket/certificates/templates/template.pdf'), true);
+  assert.equal(isR2TemplateRef('r2://bucket/certificates/generated/template.pdf'), false);
+  assert.equal(isR2TemplateRef('r2://other-bucket/certificates/templates/template.pdf'), false);
   assert.equal(isR2TemplateRef('https://example.com/template.pdf'), false);
 
   const { upload, uploadPdf } = await import('../src/middleware/upload.middleware.js?r2-storage-test');
@@ -166,12 +235,33 @@ test('discount validation and pricing use cents consistently', () => {
   };
 
   assert.equal(normalizeDiscountCode(' early_bird '), 'EARLY_BIRD');
+  assert.equal(normalizeDiscountAmountForStorage('PERCENTAGE', '25'), 25);
+  assert.equal(normalizeDiscountAmountForStorage('FIXED_AMOUNT', '250'), 25000);
   assert.equal(isDiscountUsable(validPercent, now), true);
+  assert.equal(hasValidDiscountAmount(validPercent), true);
   assert.equal(calculateDiscountedAmountCents(40000, validPercent), 30000);
   assert.equal(calculateDiscountedAmountCents(40000, validFixed), 30000);
   assert.equal(calculateDiscountedAmountCents(5000, validFixed), 0);
   assert.equal(isDiscountUsable({ ...validPercent, usedCount: 2 }, now), false);
   assert.equal(isDiscountUsable({ ...validPercent, isActive: false }, now), false);
+  assert.equal(isDiscountUsable({ ...validPercent, amount: 101 }, now), false);
+  assert.equal(hasValidDiscountAmount({ ...validFixed, amount: 0 }), false);
+  assert.throws(
+    () => normalizeDiscountAmountForStorage('PERCENTAGE', 101),
+    /percentage discount amount must be between 1 and 100/
+  );
+  assert.throws(
+    () => normalizeDiscountAmountForStorage('FIXED_AMOUNT', 21474837),
+    /fixed discount amount cannot exceed/
+  );
+  assert.throws(
+    () => calculateDiscountedAmountCents(40000, { ...validPercent, amount: 101 }),
+    /Invalid discount code/
+  );
+  assert.throws(
+    () => calculateDiscountedAmountCents(40000, { type: 'UNKNOWN', amount: 10 }),
+    /Invalid discount code/
+  );
 });
 
 test('ticket tier snapshot only includes checkout-safe tier metadata', () => {

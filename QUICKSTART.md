@@ -3,7 +3,7 @@
 ## Prerequisites Check
 
 Before starting, make sure you have:
-- ✅ Node.js (v18+) installed
+- ✅ Node.js (v22.12+) installed
 - ✅ PostgreSQL installed and running
 - ⚠️ Redis (optional - for background jobs)
 
@@ -27,15 +27,15 @@ cd backend
 # Install dependencies (if not done)
 npm install
 
-# The .env file has been created for you
-# Update DATABASE_URL in .env with your PostgreSQL credentials:
+# Copy .env.example to .env, then update DATABASE_URL with your PostgreSQL credentials:
+# cp .env.example .env
 # DATABASE_URL="postgresql://YOUR_USERNAME:YOUR_PASSWORD@localhost:5432/event_management"
 
 # Generate Prisma Client
 npm run prisma:generate
 
-# Run database migrations
-npm run prisma:migrate
+# Create/apply local database migrations
+npm run prisma:migrate:dev
 
 # Start the backend server
 npm run dev
@@ -54,8 +54,8 @@ cd frontend
 # Install dependencies (if not done)
 npm install
 
-# The .env file has been created for you
-# No changes needed for local development
+# Copy .env.example to .env for local development if it does not exist
+# cp .env.example .env
 
 # Start the frontend
 npm run dev
@@ -113,6 +113,7 @@ SMTP_PASS=your_app_password
 ```
 RAZORPAY_KEY_ID=your_key_id
 RAZORPAY_KEY_SECRET=your_key_secret
+RAZORPAY_WEBHOOK_SECRET=your_webhook_secret
 ```
 4. Update in `frontend/.env`:
 ```
@@ -123,7 +124,6 @@ VITE_RAZORPAY_KEY_ID=your_key_id
 PHONEPE_CLIENT_ID=your_client_id
 PHONEPE_CLIENT_SECRET=your_client_secret
 PHONEPE_CLIENT_VERSION=1
-PHONEPE_SALT_INDEX=1
 PHONEPE_ENV=sandbox
 ```
 

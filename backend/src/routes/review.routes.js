@@ -9,8 +9,17 @@ const router = express.Router();
 router.get('/events/:id/reviews', async (req, res) => {
     try {
         const { id } = req.params;
+        const event = await prisma.event.findFirst({
+            where: { id, published: true },
+            select: { id: true }
+        });
+
+        if (!event) {
+            return res.status(404).json({ error: 'Event not found' });
+        }
+
         const reviews = await prisma.review.findMany({
-            where: { eventId: id },
+            where: { eventId: event.id },
             include: {
                 user: { select: { name: true } }
             },
@@ -19,7 +28,7 @@ router.get('/events/:id/reviews', async (req, res) => {
 
         // Calculate average
         const aggregate = await prisma.review.aggregate({
-            where: { eventId: id },
+            where: { eventId: event.id },
             _avg: { rating: true },
             _count: { rating: true }
         });
@@ -39,7 +48,7 @@ router.get('/events/:id/reviews', async (req, res) => {
 // Create a review
 router.post('/events/:id/reviews', [
     authenticate,
-    body('rating').isInt({ min: 1, max: 5 }),
+    body('rating').isInt({ min: 1, max: 5 }).toInt(),
     body('comment').optional().trim().isLength({ max: 500 })
 ], async (req, res) => {
     try {
@@ -51,12 +60,9 @@ router.post('/events/:id/reviews', [
         const userId = req.user.id;
 
         // 1. Check if event exists
-        const event = await prisma.event.findUnique({ where: { id } });
+        const event = await prisma.event.findFirst({ where: { id, published: true } });
         if (!event) return res.status(404).json({ error: 'Event not found' });
 
-        // 2. Check if user has attended (Paid/Confirmed registration and event has ended/started?)
-        // Let's assume they can review if they have a valid registration. 
-        // Ideally enforce that event.startTime < now (post-event review)
         if (new Date(event.startTime) > new Date()) {
             return res.status(400).json({ error: 'Cannot review, event has not started yet' });
         }
@@ -64,12 +70,7 @@ router.post('/events/:id/reviews', [
         const registration = await prisma.registration.findFirst({
             where: {
                 eventId: id,
-                userEmail: req.user.email, // using email as link since user ID might vary if they registered as guest then signed up.
-                // Wait, Schema has 'userId' in Review.
-                // If user authenticated, we check if they have a registration.
-                // If Registration table has `userEmail`, does it link to User?
-                // The schema doesn't explicitly link Registration to User model, just `userEmail`.
-                // So we check by email.
+                userEmail: req.user.email,
                 status: { in: ['PAID', 'CONFIRMED'] }
             }
         });

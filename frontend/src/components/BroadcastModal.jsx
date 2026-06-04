@@ -1,11 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { X, Send, Loader } from 'lucide-react';
 import api from '../utils/api';
 import toast from 'react-hot-toast';
+import Modal from './Modal';
 
 export default function BroadcastModal({ isOpen, onClose }) {
     const [loading, setLoading] = useState(false);
     const [events, setEvents] = useState([]);
+    const closeButtonRef = useRef(null);
     const [formData, setFormData] = useState({
         type: 'ALL', // ALL, EVENT
         eventId: '',
@@ -51,15 +53,27 @@ export default function BroadcastModal({ isOpen, onClose }) {
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in">
-            <div className="bg-[#18181b] border border-white/10 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden">
+        <Modal
+            ariaLabelledby="broadcast-title"
+            ariaDescribedby="broadcast-description"
+            initialFocusRef={closeButtonRef}
+            onClose={onClose}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in"
+            panelClassName="bg-[#18181b] border border-white/10 rounded-2xl w-full max-h-[calc(100dvh-2rem)] max-w-2xl shadow-2xl overflow-y-auto overscroll-contain"
+        >
                 {/* Header */}
                 <div className="px-6 py-4 border-b border-white/10 flex justify-between items-center bg-[#27272a]/50">
-                    <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                    <h2 id="broadcast-title" className="text-xl font-bold text-white flex items-center gap-2">
                         <Send size={20} className="text-[#E23744]" />
                         Broadcast Email
                     </h2>
+                    <p id="broadcast-description" className="sr-only">
+                        Compose and send an email broadcast to all participants or to one event.
+                    </p>
                     <button
+                        type="button"
+                        ref={closeButtonRef}
+                        aria-label="Close broadcast modal"
                         onClick={onClose}
                         className="text-gray-400 hover:text-white transition-colors"
                     >
@@ -71,8 +85,9 @@ export default function BroadcastModal({ isOpen, onClose }) {
                 <form onSubmit={handleSubmit} className="p-6 space-y-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div className="space-y-2">
-                            <label className="text-sm font-medium text-gray-300">Recipients</label>
+                            <label htmlFor="broadcast-type" className="text-sm font-medium text-gray-300">Recipients</label>
                             <select
+                                id="broadcast-type"
                                 className="input"
                                 value={formData.type}
                                 onChange={(e) => setFormData({ ...formData, type: e.target.value })}
@@ -84,8 +99,9 @@ export default function BroadcastModal({ isOpen, onClose }) {
 
                         {formData.type === 'EVENT' && (
                             <div className="space-y-2 animate-fade-in">
-                                <label className="text-sm font-medium text-gray-300">Select Event</label>
+                                <label htmlFor="broadcast-event" className="text-sm font-medium text-gray-300">Select Event</label>
                                 <select
+                                    id="broadcast-event"
                                     className="input"
                                     value={formData.eventId}
                                     onChange={(e) => setFormData({ ...formData, eventId: e.target.value })}
@@ -103,8 +119,9 @@ export default function BroadcastModal({ isOpen, onClose }) {
                     </div>
 
                     <div className="space-y-2">
-                        <label className="text-sm font-medium text-gray-300">Subject</label>
+                        <label htmlFor="broadcast-subject" className="text-sm font-medium text-gray-300">Subject</label>
                         <input
+                            id="broadcast-subject"
                             type="text"
                             className="input"
                             placeholder="e.g., Important update regarding..."
@@ -115,15 +132,16 @@ export default function BroadcastModal({ isOpen, onClose }) {
                     </div>
 
                     <div className="space-y-2">
-                        <label className="text-sm font-medium text-gray-300">Message (HTML Supported)</label>
+                        <label htmlFor="broadcast-content" className="text-sm font-medium text-gray-300">Message (basic HTML allowed)</label>
                         <textarea
+                            id="broadcast-content"
                             className="input min-h-[200px] font-mono text-sm"
-                            placeholder="<p>Hello everyone,</p><br/><p>We have an announcement...</p>"
+                            placeholder="<p>Hello everyone,</p><p>We have an announcement...</p>"
                             value={formData.content}
                             onChange={(e) => setFormData({ ...formData, content: e.target.value })}
                             required
                         />
-                        <p className="text-xs text-gray-500">You can use basic HTML tags for formatting.</p>
+                        <p className="text-xs text-gray-500">Allowed tags include paragraphs, headings, lists, bold text, and safe links.</p>
                     </div>
 
                     <div className="flex justify-end pt-2">
@@ -154,7 +172,6 @@ export default function BroadcastModal({ isOpen, onClose }) {
                         </button>
                     </div>
                 </form>
-            </div>
-        </div>
+        </Modal>
     );
 }

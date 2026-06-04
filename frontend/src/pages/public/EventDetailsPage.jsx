@@ -2,9 +2,9 @@ import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { Calendar, MapPin, Users, ArrowLeft, Loader2 } from 'lucide-react';
 import { useForm } from 'react-hook-form';
-import api, { getImageUrl } from '../../utils/api';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
+import api, { getImageUrl } from '../../utils/api';
 import ShareButton from '../../components/ShareButton';
 import ShareButtons from '../../components/ShareButtons';
 import CountdownTimer from '../../components/CountdownTimer';
@@ -17,7 +17,7 @@ export default function EventDetailsPage() {
   const [loading, setLoading] = useState(true);
   const [waitlistJoined, setWaitlistJoined] = useState(false);
 
-  const { handleSubmit, formState: { isSubmitting } } = useForm();
+  const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm();
 
   useEffect(() => {
     fetchEvent();
@@ -38,6 +38,7 @@ export default function EventDetailsPage() {
     try {
       await api.post(`/events/${event.id}/waitlist`, data);
       setWaitlistJoined(true);
+      reset();
       toast.success('Successfully joined the waitlist!');
     } catch (error) {
       const msg = error.response?.data?.error || 'Failed to join waitlist';
@@ -47,197 +48,239 @@ export default function EventDetailsPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#09090b]">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-[#E23744]"></div>
+      <div className="relative z-10 flex min-h-[52vh] items-center justify-center">
+        <div className="rounded-[1.25rem] border border-white/10 bg-[#12100e] px-6 py-5 text-center shadow-[0_18px_70px_rgba(0,0,0,0.24)]">
+          <Loader2 className="mx-auto animate-spin text-[#E23744]" size={32} />
+          <p className="mt-3 text-sm font-semibold text-[#a99f95]">Loading event details</p>
+        </div>
       </div>
     );
   }
 
   if (!event) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#09090b]">
-        <div className="text-center">
-          <h2 className="text-2xl font-bold text-white mb-4">Event not found</h2>
-          <Link to="/" className="btn btn-primary">Back to Events</Link>
+      <div className="relative z-10 flex min-h-[52vh] items-center justify-center">
+        <div className="w-full max-w-md rounded-[1.25rem] border border-white/10 bg-[#12100e] p-8 text-center shadow-[0_18px_70px_rgba(0,0,0,0.24)]">
+          <h2 className="text-2xl font-black text-[#f7efe3]">Event not found</h2>
+          <p className="mt-2 text-sm leading-6 text-[#a99f95]">This event may have been removed or the link may be incorrect.</p>
+          <Link to="/" className="mt-6 inline-flex rounded-full bg-[#E23744] px-5 py-3 text-sm font-bold text-white transition-colors hover:bg-[#d12c39] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744] focus-visible:ring-offset-2 focus-visible:ring-offset-[#09090b]">
+            Back to Events
+          </Link>
         </div>
       </div>
     );
   }
 
   const availableSlots = event.capacity - (event._count?.registrations || 0);
+  const displaySlots = Math.max(availableSlots, 0);
   const isFull = availableSlots <= 0;
+  const registrationClosed = event.startTime ? new Date(event.startTime) <= new Date() : false;
+  const organizerName = event.organizer?.name || 'Organizer';
+  const posterUrl = getImageUrl(event.posterUrl) || 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?auto=format&fit=crop&w=1600&q=80';
 
   return (
-    <div className="min-h-screen bg-[#09090b] text-white pb-20 relative overflow-hidden font-['Inter']">
-      {/* Ambient Background */}
-      <div className="fixed inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-purple-500/10 rounded-full blur-[100px]" />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-[#E23744]/10 rounded-full blur-[100px]" />
-      </div>
-
-      {/* Back Button */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 relative z-10">
-        <Link to="/" className="inline-flex items-center text-gray-400 hover:text-white transition-colors group">
-          <div className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center mr-3 group-hover:bg-white/10 transition-all border border-white/5">
-            <ArrowLeft size={16} />
-          </div>
-          <span className="text-sm font-medium">Back to Events</span>
+    <div className="relative z-10 pb-12 text-[#f7efe3]">
+      <div className="mb-7">
+        <Link
+          to="/"
+          className="inline-flex items-center gap-3 rounded-full border border-white/10 bg-white/[0.035] px-4 py-2 text-sm font-bold text-[#a99f95] transition-colors hover:bg-white/[0.07] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744]"
+        >
+          <ArrowLeft size={16} />
+          Back to Events
         </Link>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 relative z-10">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Main Content (Left) */}
-          <div className="lg:col-span-2 space-y-8">
-            {/* Title & Share Mobile */}
-            <div className="flex justify-between items-start lg:hidden">
-              <h1 className="text-3xl font-bold text-white tracking-tight">{event.title}</h1>
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_24rem] lg:items-start">
+        <article className="min-w-0 space-y-6">
+          <div className="flex min-w-0 items-start justify-between gap-4 lg:hidden">
+            <h1 className="min-w-0 flex-1 break-words text-balance text-3xl font-black leading-tight tracking-normal text-[#f7efe3] sm:text-4xl">
+              {event.title}
+            </h1>
+            <div className="shrink-0">
               <ShareButton event={event} />
             </div>
-
-            {/* Poster Image */}
-            <div className="aspect-video w-full rounded-3xl overflow-hidden border border-white/10 bg-[#18181b] shadow-2xl relative group">
-              <div className="absolute inset-0 bg-gradient-to-t from-[#09090b] via-transparent to-transparent opacity-60 z-10" />
-              <img
-                src={getImageUrl(event.posterUrl) || 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30'}
-                alt={event.title}
-                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 ease-out"
-              />
-            </div>
-
-            {/* Desktop Title */}
-            <div className="hidden lg:flex justify-between items-start">
-              <h1 className="text-4xl md:text-5xl font-bold text-white tracking-tight leading-tight">{event.title}</h1>
-              <div className="flex gap-2">
-                <ShareButtons event={event} />
-              </div>
-            </div>
-
-            {/* Organized By */}
-            <div className="flex items-center space-x-4 bg-white/5 border border-white/5 p-4 rounded-2xl backdrop-blur-md">
-              <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#E23744] to-purple-600 flex items-center justify-center text-white font-bold text-lg shadow-lg">
-                {event.organizer.name.charAt(0).toUpperCase()}
-              </div>
-              <div>
-                <p className="text-sm text-gray-400">Organized by</p>
-                <p className="font-semibold text-white">{event.organizer.name}</p>
-              </div>
-            </div>
-
-            {/* Description */}
-            <div className="glass-card bg-[#18181b]/60 border border-white/10 p-8 rounded-3xl backdrop-blur-xl">
-              <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
-                About this event
-              </h3>
-              <div className="prose prose-invert max-w-none text-gray-300 leading-relaxed">
-                <p className="whitespace-pre-wrap">{event.description}</p>
-              </div>
-            </div>
-
-            {/* Polls Section */}
-            {new Date(event.endTime) > new Date() && (
-              <PollsSection eventId={id} />
-            )}
-
-            {/* Reviews Section */}
-            <ReviewsSection eventId={id} eventEndTime={event.endTime} />
           </div>
 
-          {/* Sidebar (Right) */}
-          <div className="space-y-6">
-            {/* Countdown Timer */}
-            <div className="glass-card bg-[#18181b]/80 border border-white/10 rounded-3xl p-6 backdrop-blur-xl shadow-xl">
-              <CountdownTimer targetDate={event.startTime} />
+          <div className="group relative aspect-[4/3] w-full overflow-hidden rounded-[1.25rem] border border-white/10 bg-[#12100e] shadow-[0_24px_90px_rgba(0,0,0,0.28)] sm:aspect-video">
+            <img
+              src={posterUrl}
+              alt={event.title}
+              className="h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.025] motion-reduce:transform-none motion-reduce:transition-none"
+              sizes="(min-width: 1024px) 760px, calc(100vw - 2rem)"
+              fetchPriority="high"
+              decoding="async"
+            />
+          </div>
+
+          <div className="hidden min-w-0 items-start justify-between gap-5 lg:flex">
+            <h1 className="min-w-0 flex-1 break-words text-balance text-5xl font-black leading-tight tracking-normal text-[#f7efe3]">
+              {event.title}
+            </h1>
+            <div className="shrink-0">
+              <ShareButtons event={event} />
             </div>
+          </div>
 
-            {/* Booking Card */}
-            <div className="glass-card bg-[#18181b]/80 border border-white/10 rounded-3xl p-8 backdrop-blur-xl shadow-2xl sticky top-8">
-              <div className="mb-6">
-                <p className="text-gray-400 text-sm font-medium uppercase tracking-wider mb-1">Price per ticket</p>
-                <div className="flex items-baseline gap-1">
-                  {event.priceCents === 0 ? (
-                    <span className="text-4xl font-bold text-white">Free</span>
-                  ) : (
-                    <>
-                      <span className="text-2xl font-bold text-[#E23744] align-top mt-1">₹</span>
-                      <span className="text-5xl font-bold text-white tracking-tight">{(event.priceCents / 100).toFixed(2)}</span>
-                    </>
-                  )}
-                </div>
-              </div>
+          <section className="flex min-w-0 items-center gap-4 rounded-[1.25rem] border border-white/10 bg-[#12100e] p-4">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-[#f2e7d8]/20 bg-[#f2e7d8] text-lg font-black text-[#17110d]">
+              {organizerName.charAt(0).toUpperCase()}
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#716960]">Organized by</p>
+              <p className="break-words text-base font-bold text-[#f7efe3]">{organizerName}</p>
+            </div>
+          </section>
 
-              <div className="space-y-6">
-                <div className="flex items-start space-x-4 group">
-                  <div className="p-3 rounded-xl bg-white/5 text-[#E23744] group-hover:bg-[#E23744]/10 transition-colors">
-                    <Calendar size={20} />
-                  </div>
-                  <div>
-                    <p className="font-semibold text-white">Date and Time</p>
-                    <p className="text-sm text-gray-400 mt-1">{format(new Date(event.startTime), 'EEEE, MMMM d, yyyy')}</p>
-                    <p className="text-sm text-gray-400">{format(new Date(event.startTime), 'h:mm a')} - {format(new Date(event.endTime), 'h:mm a')}</p>
-                    {/* Add to Calendar Link placeholder if needed */}
-                  </div>
-                </div>
+          <section className="rounded-[1.25rem] border border-white/10 bg-[#12100e] p-5 sm:p-6">
+            <h2 className="text-xl font-black text-[#f7efe3]">About this event</h2>
+            <p className="mt-4 whitespace-pre-wrap break-words text-sm leading-7 text-[#c9c0b7] sm:text-base">
+              {event.description || 'No description has been added yet.'}
+            </p>
+          </section>
+        </article>
 
-                <div className="flex items-start space-x-4 group">
-                  <div className="p-3 rounded-xl bg-white/5 text-[#E23744] group-hover:bg-[#E23744]/10 transition-colors">
-                    <MapPin size={20} />
-                  </div>
-                  <div>
-                    <p className="font-semibold text-white">Location</p>
-                    <p className="text-sm text-gray-400 mt-1">{event.location}</p>
-                    <a
-                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.location)}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs text-[#E23744] hover:text-[#ff4d5a] mt-2 inline-block transition-colors underline-offset-4 hover:underline"
-                    >
-                      View on map
-                    </a>
-                  </div>
-                </div>
+        <aside className="space-y-4 lg:sticky lg:top-28">
+          <section className="rounded-[1.25rem] border border-white/10 bg-[#12100e] p-4">
+            <CountdownTimer targetDate={event.startTime} label="Event starts in" />
+          </section>
 
-                <div className="flex items-start space-x-4 group">
-                  <div className="p-3 rounded-xl bg-white/5 text-[#E23744] group-hover:bg-[#E23744]/10 transition-colors">
-                    <Users size={20} />
-                  </div>
-                  <div>
-                    <p className="font-semibold text-white">Availability</p>
-                    <p className={`text-sm mt-1 font-medium ${isFull ? 'text-red-500' : 'text-emerald-400'}`}>
-                      {isFull ? 'Sold Out' : `${availableSlots} spots left`}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-8 pt-8 border-t border-white/10">
-                {isFull ? (
-                  !waitlistJoined ? (
-                    <button
-                      onClick={handleSubmit(onJoinWaitlist)}
-                      disabled={isSubmitting}
-                      className="w-full py-4 bg-white/10 hover:bg-white/20 text-white rounded-xl font-bold transition-all border border-white/5 hover:border-white/20"
-                    >
-                      {isSubmitting ? <Loader2 className="animate-spin mx-auto" /> : 'Join Waitlist'}
-                    </button>
-                  ) : (
-                    <div className="w-full py-4 bg-emerald-500/10 text-emerald-500 rounded-xl font-bold text-center border border-emerald-500/20">
-                      Added to Waitlist
-                    </div>
-                  )
+          <section className="rounded-[1.25rem] border border-white/10 bg-[#12100e] p-5 shadow-[0_24px_90px_rgba(0,0,0,0.28)] sm:p-6">
+            <div className="border-b border-white/10 pb-6">
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#716960]">Price per ticket</p>
+              <div className="mt-2 flex items-baseline gap-1">
+                {event.priceCents === 0 ? (
+                  <span className="text-4xl font-black text-[#f7efe3]">Free</span>
                 ) : (
-                  <Link
-                    to={`/events/${id}/register`}
-                    className="block w-full py-4 bg-[#E23744] hover:bg-[#c92633] text-white text-center rounded-xl font-bold text-lg shadow-lg shadow-[#E23744]/25 transition-all transform hover:scale-[1.02] active:scale-[0.98]"
-                  >
-                    Book Tickets
-                  </Link>
+                  <>
+                    <span className="text-2xl font-black text-[#E23744]">₹</span>
+                    <span className="text-5xl font-black tracking-normal text-[#f7efe3]">{(event.priceCents / 100).toFixed(2)}</span>
+                  </>
                 )}
               </div>
             </div>
-          </div>
-        </div>
+
+            <div className="mt-6 space-y-5">
+              <div className="flex min-w-0 items-start gap-4">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#E23744]/15 bg-[#E23744]/10 text-[#ff9aa2]">
+                  <Calendar size={20} />
+                </div>
+                <div className="min-w-0">
+                  <p className="font-bold text-[#f7efe3]">Date and Time</p>
+                  <p className="mt-1 text-sm leading-6 text-[#a99f95]">{format(new Date(event.startTime), 'EEEE, MMMM d, yyyy')}</p>
+                  <p className="text-sm leading-6 text-[#a99f95]">{format(new Date(event.startTime), 'h:mm a')} - {format(new Date(event.endTime), 'h:mm a')}</p>
+                </div>
+              </div>
+
+              <div className="flex min-w-0 items-start gap-4">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#E23744]/15 bg-[#E23744]/10 text-[#ff9aa2]">
+                  <MapPin size={20} />
+                </div>
+                <div className="min-w-0">
+                  <p className="font-bold text-[#f7efe3]">Location</p>
+                  <p className="mt-1 break-words text-sm leading-6 text-[#a99f95]">{event.location}</p>
+                  <a
+                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.location)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-2 inline-flex text-sm font-bold text-[#ff9aa2] underline-offset-4 transition-colors hover:text-white hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744]"
+                  >
+                    View on map
+                  </a>
+                </div>
+              </div>
+
+              <div className="flex min-w-0 items-start gap-4">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#E23744]/15 bg-[#E23744]/10 text-[#ff9aa2]">
+                  <Users size={20} />
+                </div>
+                <div className="min-w-0">
+                  <p className="font-bold text-[#f7efe3]">Availability</p>
+                  <p className={`mt-1 text-sm font-bold ${isFull ? 'text-[#ff9aa2]' : 'text-emerald-300'}`}>
+                    {isFull ? 'Sold Out' : `${displaySlots} spots left`}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-7 border-t border-white/10 pt-6">
+              {registrationClosed ? (
+                <div className="rounded-2xl border border-[#E23744]/20 bg-[#E23744]/10 p-5 text-center">
+                  <p className="font-black text-[#f7efe3]">Registration closed</p>
+                  <p className="mt-1 text-sm leading-6 text-[#a99f95]">This event has already started.</p>
+                </div>
+              ) : isFull ? (
+                !waitlistJoined ? (
+                  <form onSubmit={handleSubmit(onJoinWaitlist)} className="space-y-3">
+                    <div>
+                      <label htmlFor="waitlist-name" className="mb-1.5 block text-xs font-bold uppercase tracking-[0.18em] text-[#8f867d]">
+                        Name
+                      </label>
+                      <input
+                        id="waitlist-name"
+                        type="text"
+                        className="input"
+                        placeholder="Your full name"
+                        aria-invalid={errors.name ? 'true' : 'false'}
+                        {...register('name', { required: true })}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="waitlist-email" className="mb-1.5 block text-xs font-bold uppercase tracking-[0.18em] text-[#8f867d]">
+                        Email
+                      </label>
+                      <input
+                        id="waitlist-email"
+                        type="email"
+                        className="input"
+                        placeholder="you@example.com"
+                        aria-invalid={errors.email ? 'true' : 'false'}
+                        {...register('email', { required: true })}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="waitlist-phone" className="mb-1.5 block text-xs font-bold uppercase tracking-[0.18em] text-[#8f867d]">
+                        Phone
+                      </label>
+                      <input
+                        id="waitlist-phone"
+                        type="tel"
+                        className="input"
+                        placeholder="Optional"
+                        {...register('phone')}
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={isSubmitting}
+                      className="inline-flex w-full items-center justify-center rounded-xl border border-white/10 bg-[#f2e7d8] px-5 py-4 text-base font-black text-[#17110d] transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744] focus-visible:ring-offset-2 focus-visible:ring-offset-[#12100e]"
+                    >
+                      {isSubmitting ? <Loader2 className="animate-spin" size={20} /> : 'Join Waitlist'}
+                    </button>
+                  </form>
+                ) : (
+                  <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-5 py-4 text-center font-black text-emerald-300">
+                    Added to Waitlist
+                  </div>
+                )
+              ) : (
+                <Link
+                  to={`/events/${id}/register`}
+                  className="inline-flex w-full items-center justify-center rounded-xl bg-[#E23744] px-5 py-4 text-base font-black text-white transition-colors hover:bg-[#d12c39] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744] focus-visible:ring-offset-2 focus-visible:ring-offset-[#12100e]"
+                >
+                  Book Tickets
+                </Link>
+              )}
+            </div>
+          </section>
+        </aside>
       </div>
-    </div >
+
+      <div className="mt-8 max-w-4xl space-y-6">
+        {new Date(event.endTime) > new Date() && (
+          <PollsSection eventId={id} />
+        )}
+        <ReviewsSection eventId={id} eventEndTime={event.endTime} />
+      </div>
+    </div>
   );
 }

@@ -54,7 +54,6 @@ export function generateQRSignature(payload) {
 export function verifyQRSignature(payload) {
   // If no signature provided, fail
   if (!payload.sig) {
-    console.log('QR Verification: No signature in payload');
     return false;
   }
 
@@ -63,17 +62,13 @@ export function verifyQRSignature(payload) {
 
     // Handle different signature lengths
     if (payload.sig.length !== expectedSignature.length) {
-      console.log('QR Verification: Signature length mismatch');
       return false;
     }
 
-    const isValid = crypto.timingSafeEqual(
+    return crypto.timingSafeEqual(
       Buffer.from(payload.sig),
       Buffer.from(expectedSignature)
     );
-
-    console.log('QR Verification:', isValid ? 'Valid' : 'Invalid signature');
-    return isValid;
   } catch (error) {
     console.error('QR Verification error:', error.message);
     return false;

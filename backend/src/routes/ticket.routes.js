@@ -1,15 +1,15 @@
 import express from 'express';
 import crypto from 'crypto';
 import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import prisma from '../config/db.js';
 import { verifyQRSignature } from '../utils/qr.util.js';
-import { authenticateToken } from '../middleware/auth.middleware.js';
-import { getR2ObjectBuffer, isR2TemplateRef } from '../utils/r2.util.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { authenticate } from '../middleware/auth.middleware.js';
+import { getR2ObjectBuffer, isR2TicketPdfRef } from '../utils/r2.util.js';
+import { verifyTicketDownloadToken } from '../utils/download-token.util.js';
+import { resolveLocalUploadPath } from '../utils/local-upload-path.util.js';
+import { mapTicketScanCheckInFailure, sendMappedFailure } from '../utils/checkin-response.util.js';
+import { isTicketExpired, markTicketCheckedIn } from '../services/checkin.service.js';
+import { getTicketArtifactBlocker } from '../utils/ticket-access.util.js';
 
 const router = express.Router();
 const debugTicketVerify = (...args) => {
@@ -20,6 +20,9 @@ const debugTicketVerify = (...args) => {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TICKET_PREFIX_PATTERN = /^[0-9a-f]{6,12}$/i;
+const ALLOWED_TICKET_PDF_HOSTS = new Set([
+  'res.cloudinary.com',
+]);
 
 const ticketLookupSelect = `
   SELECT
@@ -81,10 +84,10 @@ async function canScanTicket(user, event) {
 
   const teamMember = await prisma.teamMember.findUnique({
     where: { eventId_email: { eventId: event.id, email: user.email } },
-    select: { role: true }
+    select: { role: true, acceptedAt: true }
   });
 
-  if (!teamMember) {
+  if (!teamMember || !teamMember.acceptedAt) {
     return { hasAccess: false, error: 'Not authorized' };
   }
 
@@ -94,6 +97,15 @@ async function canScanTicket(user, event) {
 
   return { hasAccess: true };
 }
+
+const isAllowedStoredPdfUrl = (value) => {
+  try {
+    const url = new URL(value);
+    return ALLOWED_TICKET_PDF_HOSTS.has(url.hostname);
+  } catch {
+    return false;
+  }
+};
 
 const toNormalizedPayload = (input) => {
   if (!input) return null;
@@ -178,6 +190,7 @@ async function findTicketByIdOrPrefix(ticketId) {
   const cleaned = ticketId.trim().toLowerCase();
   const isFullId = UUID_PATTERN.test(cleaned);
   const isPrefix = TICKET_PREFIX_PATTERN.test(cleaned);
+  const allowPrefixLookup = process.env.NODE_ENV !== 'production';
 
   if (!isFullId && !isPrefix) {
     return null;
@@ -191,7 +204,7 @@ async function findTicketByIdOrPrefix(ticketId) {
   }
 
   // Try prefix match (short IDs like "2FBF033A" → first 8 chars of UUID)
-  if (isPrefix) {
+  if (isPrefix && allowPrefixLookup) {
     const rows = await prisma.$queryRawUnsafe(`${ticketLookupSelect} WHERE t.id LIKE $1 LIMIT 1`, `${cleaned}%`);
     const ticket = mapTicketRow(rows[0]);
     if (ticket) return ticket;
@@ -200,8 +213,8 @@ async function findTicketByIdOrPrefix(ticketId) {
   return null;
 }
 
-// Verify ticket (for scanning at venue) - uses JWT-only auth for fast gate checks.
-router.post('/verify', authenticateToken, async (req, res) => {
+// Verify ticket for scanning at venue.
+router.post('/verify', authenticate, async (req, res) => {
   try {
     const { qrPayload } = req.body;
 
@@ -224,7 +237,8 @@ router.post('/verify', authenticateToken, async (req, res) => {
     // Fallback: treat raw qrPayload as a plain ticket ID string
     if (!ticket && typeof qrPayload === 'string') {
       const rawId = qrPayload.trim().replace(/^\uFEFF/, '').replace(/[^a-fA-F0-9-]/g, '');
-      if (rawId.length >= 6) {
+      const minRawLength = process.env.NODE_ENV === 'production' ? 36 : 6;
+      if (rawId.length >= minRawLength) {
         debugTicketVerify('[verify] Trying raw string as ticketId:', rawId);
         ticket = await findTicketByIdOrPrefix(rawId);
       }
@@ -259,12 +273,11 @@ router.post('/verify', authenticateToken, async (req, res) => {
       (payload.eventId === ticket.order.registration.event.id || !payload.eventId)
     );
 
-    const isDev = process.env.NODE_ENV !== 'production';
-    const allowUnsignedScan = process.env.ALLOW_UNSIGNED_TICKET_SCAN === 'true';
+    const allowUnsignedScan = process.env.NODE_ENV !== 'production' && process.env.ALLOW_UNSIGNED_TICKET_SCAN === 'true';
     const hasValidHmac = payload ? verifyQRSignature(payload) : false;
-    const isValid = isDev ? true : (hasValidHmac || matchesStoredPayload || (allowUnsignedScan && matchesTicketIdentity));
+    const isValid = hasValidHmac || matchesStoredPayload || (allowUnsignedScan && matchesTicketIdentity);
 
-    debugTicketVerify('[verify] Sig check:', { isDev, allowUnsignedScan, hasValidHmac, matchesStoredPayload, matchesTicketIdentity, isValid });
+    debugTicketVerify('[verify] Sig check:', { allowUnsignedScan, hasValidHmac, matchesStoredPayload, matchesTicketIdentity, isValid });
 
     if (!isValid) {
       return res.status(400).json({
@@ -286,62 +299,29 @@ router.post('/verify', authenticateToken, async (req, res) => {
 
     // Check if revoked
     if (ticket.revoked) {
-      return res.status(400).json({
-        valid: false,
-        error: 'Ticket has been revoked'
-      });
+      return sendMappedFailure(res, mapTicketScanCheckInFailure({ blockedReason: 'revoked' }));
     }
 
-    // Expiry check: allow a 24-hour grace period AFTER event end
-    if (ticket.validUntil) {
-      const graceEnd = new Date(ticket.validUntil.getTime() + 24 * 60 * 60 * 1000);
-      if (new Date() > graceEnd) {
-        return res.status(400).json({
-          valid: false,
-          error: 'Ticket has expired'
-        });
-      }
+    if (isTicketExpired(ticket)) {
+      return sendMappedFailure(res, mapTicketScanCheckInFailure({ blockedReason: 'expired' }));
     }
 
     // Check if already scanned
     if (ticket.scannedAt || ticket.checkedInAt) {
-      return res.status(400).json({
-        valid: false,
-        alreadyScanned: true,
-        error: 'Ticket already used',
-        scannedAt: ticket.scannedAt || ticket.checkedInAt,
+      return sendMappedFailure(res, mapTicketScanCheckInFailure({
+        blockedReason: 'already-checked-in',
+        scannedAt: ticket.scannedAt,
+        checkedInAt: ticket.checkedInAt
+      }, {
         attendee: ticket.order.registration.formResponse
-      });
+      }));
     }
 
-    // Mark ticket as scanned (set both fields for compatibility)
-    const now = new Date();
-    const updateResult = await prisma.ticket.updateMany({
-      where: {
-        id: ticket.id,
-        scannedAt: null,
-        checkedInAt: null
-      },
-      data: {
-        scannedAt: now,
-        checkedInAt: now,
-        checkedInBy: req.user.id
-      }
-    });
-
-    if (updateResult.count === 0) {
-      const currentTicket = await prisma.ticket.findUnique({
-        where: { id: ticket.id },
-        select: { scannedAt: true, checkedInAt: true }
-      });
-
-      return res.status(400).json({
-        valid: false,
-        alreadyScanned: true,
-        error: 'Ticket already used',
-        scannedAt: currentTicket?.scannedAt || currentTicket?.checkedInAt || now,
+    const checkInResult = await markTicketCheckedIn(ticket.id, req.user.id);
+    if (!checkInResult.checkedIn) {
+      return sendMappedFailure(res, mapTicketScanCheckInFailure(checkInResult, {
         attendee: ticket.order.registration.formResponse
-      });
+      }));
     }
 
     res.json({
@@ -369,11 +349,33 @@ router.get('/:id/pdf', async (req, res) => {
     const { id } = req.params;
 
     const ticket = await prisma.ticket.findUnique({
-      where: { id }
+      where: { id },
+      include: {
+        order: {
+          include: {
+            registration: true
+          }
+        }
+      }
     });
 
     if (!ticket) {
       return res.status(404).json({ error: 'Ticket not found' });
+    }
+
+    const verifiedToken = verifyTicketDownloadToken(req.query.token, {
+      ticketId: ticket.id,
+      orderId: ticket.orderId,
+      email: ticket.order.registration.userEmail
+    });
+
+    if (!verifiedToken) {
+      return res.status(403).json({ error: 'Valid ticket download token required' });
+    }
+
+    const artifactBlocker = getTicketArtifactBlocker(ticket);
+    if (artifactBlocker) {
+      return res.status(artifactBlocker.statusCode).json({ error: artifactBlocker.message });
     }
 
     if (!ticket.ticketPdfUrl) {
@@ -382,8 +384,8 @@ router.get('/:id/pdf', async (req, res) => {
 
     const pdfRef = ticket.ticketPdfUrl;
 
-    if (isR2TemplateRef(pdfRef)) {
-      const pdfBuffer = await getR2ObjectBuffer(pdfRef);
+    if (isR2TicketPdfRef(pdfRef)) {
+      const pdfBuffer = await getR2ObjectBuffer(pdfRef, { allowedPrefixes: ['tickets/'] });
       const filename = `ticket-${id.substring(0, 8)}.pdf`;
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
@@ -391,15 +393,22 @@ router.get('/:id/pdf', async (req, res) => {
     }
 
     if (!pdfRef.startsWith('http')) {
-      const localPath = pdfRef.startsWith('/uploads/')
-        ? path.join(__dirname, '../../', pdfRef)
-        : path.join(__dirname, '../../uploads/', pdfRef);
+      let localPath;
+      try {
+        localPath = resolveLocalUploadPath(pdfRef, { allowedExtensions: ['.pdf'] });
+      } catch {
+        return res.status(400).json({ error: 'Ticket PDF path is invalid' });
+      }
 
       if (!fs.existsSync(localPath)) {
         return res.status(404).json({ error: 'Ticket PDF file not found' });
       }
 
       return res.sendFile(localPath);
+    }
+
+    if (!isAllowedStoredPdfUrl(pdfRef)) {
+      return res.status(400).json({ error: 'Ticket PDF storage URL is not trusted' });
     }
 
     return res.redirect(pdfRef);
@@ -422,12 +431,31 @@ router.get('/order/:orderId/download', async (req, res) => {
       include: {
         registration: {
           include: { event: true }
-        }
+        },
+        ticket: true
       }
     });
 
     if (!order) {
       return res.status(404).send('Order not found');
+    }
+
+    const verifiedToken = verifyTicketDownloadToken(req.query.token, {
+      orderId: order.id,
+      email: order.registration.userEmail
+    });
+
+    if (!verifiedToken) {
+      return res.status(403).send('Valid ticket download token required');
+    }
+
+    if (order.status !== 'PAID') {
+      return res.status(409).send('Ticket download is available after payment is complete');
+    }
+
+    const artifactBlocker = getTicketArtifactBlocker(order.ticket);
+    if (artifactBlocker) {
+      return res.status(artifactBlocker.statusCode).send(artifactBlocker.message);
     }
 
     // Generate PDF buffer directly (skip Cloudinary for downloads)

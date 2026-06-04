@@ -1,21 +1,32 @@
 import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
+import { Calendar, Users } from 'lucide-react';
 import api, { getImageUrl } from '../../utils/api';
+import { ErrorState, LoadingBlock } from '../../components/StateBlock';
 
 export default function TeamEventsPage() {
+    const [searchParams, setSearchParams] = useSearchParams();
     const [events, setEvents] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const inviteEventId = searchParams.get('event');
+    const inviteToken = searchParams.get('invite');
 
     useEffect(() => {
         fetchTeamEvents();
-    }, []);
+    }, [inviteEventId, inviteToken]);
 
     const fetchTeamEvents = async () => {
         try {
             setLoading(true);
-            const response = await api.get('/team/events');
+            setError(null);
+            const response = await api.get('/team/events', {
+                params: inviteEventId && inviteToken
+                    ? { event: inviteEventId, invite: inviteToken }
+                    : undefined
+            });
             setEvents(response.data);
+            setError(null);
         } catch (err) {
             setError(err.response?.data?.error || 'Failed to load team events');
         } finally {
@@ -25,24 +36,34 @@ export default function TeamEventsPage() {
 
     const acceptInvitation = async (eventId) => {
         try {
-            await api.post(`/team/events/${eventId}/accept`);
+            setError(null);
+            const payload = inviteEventId === eventId && inviteToken
+                ? { inviteToken }
+                : {};
+            await api.post(`/team/events/${eventId}/accept`, payload);
+            if (inviteEventId === eventId) {
+                setSearchParams({});
+            }
             fetchTeamEvents();
         } catch (err) {
             console.error('Failed to accept invitation:', err);
+            setError(err.response?.data?.error || 'Failed to accept invitation');
         }
     };
 
     const getRoleBadge = (role) => {
         const colors = {
-            MANAGER: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
-            SCANNER: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-            STAFF: 'bg-gray-500/20 text-gray-400 border-gray-500/30'
+            SUPER_MANAGER: 'border-amber-400/25 bg-amber-400/10 text-amber-200',
+            MANAGER: 'border-[#E23744]/25 bg-[#E23744]/10 text-[#ffb3b8]',
+            SCANNER: 'border-sky-400/25 bg-sky-400/10 text-sky-200',
+            STAFF: 'border-white/10 bg-white/[0.05] text-[#d9d0c6]'
         };
         return colors[role] || colors.STAFF;
     };
 
     const getRoleDescription = (role) => {
         const descriptions = {
+            SUPER_MANAGER: 'Full event access + forms + financials',
             MANAGER: 'Full event access + analytics',
             SCANNER: 'Check-in & attendee list access',
             STAFF: 'View-only access'
@@ -51,21 +72,20 @@ export default function TeamEventsPage() {
     };
 
     if (loading) {
-        return (
-            <div className="flex items-center justify-center min-h-[400px]">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
-            </div>
-        );
+        return <LoadingBlock title="Loading team events" message="Checking invitations and role access." />;
     }
 
     if (error) {
         return (
-            <div className="p-6 text-center">
-                <p className="text-red-400">{error}</p>
-                <button onClick={fetchTeamEvents} className="mt-4 btn-primary">
-                    Retry
-                </button>
-            </div>
+            <ErrorState
+                title="Could not load team events"
+                message={error}
+                action={(
+                    <button type="button" onClick={fetchTeamEvents} className="admin-primary-action inline-flex">
+                        Retry
+                    </button>
+                )}
+            />
         );
     }
 
@@ -79,8 +99,10 @@ export default function TeamEventsPage() {
             </div>
 
             {events.length === 0 ? (
-                <div className="glass-card p-12 text-center">
-                    <div className="text-6xl mb-4">👥</div>
+                <div className="admin-card p-12 text-center">
+                    <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-[#E23744]/25 bg-[#E23744]/10 text-[#ff6c76]">
+                        <Users size={28} />
+                    </div>
                     <h3 className="text-xl font-semibold text-white mb-2">No Team Events</h3>
                     <p className="text-gray-400">
                         You haven't been invited to any events as a team member yet.
@@ -89,7 +111,7 @@ export default function TeamEventsPage() {
             ) : (
                 <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
                     {events.map((event) => (
-                        <div key={event.id} className="glass-card overflow-hidden">
+                        <div key={event.id} className="admin-card overflow-hidden p-0">
                             {/* Event Poster */}
                             {event.posterUrl && (
                                 <div className="h-40 bg-gray-800">
@@ -126,9 +148,7 @@ export default function TeamEventsPage() {
 
                                 {/* Event Date */}
                                 <div className="flex items-center text-sm text-gray-400 mb-4">
-                                    <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                                    </svg>
+                                    <Calendar className="mr-2 h-4 w-4 shrink-0 text-[#716960]" />
                                     {new Date(event.startTime).toLocaleDateString('en-US', {
                                         weekday: 'short',
                                         month: 'short',
@@ -147,7 +167,7 @@ export default function TeamEventsPage() {
                                     {!event.acceptedAt ? (
                                         <button
                                             onClick={() => acceptInvitation(event.id)}
-                                            className="flex-1 btn-primary text-sm py-2"
+                                            className="btn btn-primary min-h-10 flex-1 px-3 py-2 text-sm"
                                         >
                                             Accept Invitation
                                         </button>
@@ -157,7 +177,7 @@ export default function TeamEventsPage() {
                                             {['SUPER_MANAGER', 'MANAGER', 'SCANNER'].includes(event.teamRole) && (
                                                 <Link
                                                     to={`/admin/team-event/${event.id}/checkin`}
-                                                    className="flex-1 btn-primary text-sm py-2 text-center"
+                                                    className="btn btn-primary min-h-10 flex-1 px-3 py-2 text-sm"
                                                 >
                                                     Check-In
                                                 </Link>
@@ -167,7 +187,7 @@ export default function TeamEventsPage() {
                                             {['SUPER_MANAGER', 'MANAGER'].includes(event.teamRole) && (
                                                 <Link
                                                     to={`/admin/events/${event.id}/edit`}
-                                                    className="flex-1 btn-secondary text-sm py-2 text-center"
+                                                    className="btn btn-secondary min-h-10 flex-1 px-3 py-2 text-sm"
                                                 >
                                                     Edit
                                                 </Link>
@@ -177,7 +197,7 @@ export default function TeamEventsPage() {
                                             {event.teamRole === 'SUPER_MANAGER' && (
                                                 <Link
                                                     to={`/admin/events/${event.id}/form`}
-                                                    className="flex-1 btn-secondary text-sm py-2 text-center"
+                                                    className="btn btn-secondary min-h-10 flex-1 px-3 py-2 text-sm"
                                                 >
                                                     Form
                                                 </Link>
@@ -188,7 +208,7 @@ export default function TeamEventsPage() {
                                                 href={`/events/${event.id}`}
                                                 target="_blank"
                                                 rel="noopener noreferrer"
-                                                className="flex-1 btn-secondary text-sm py-2 text-center"
+                                                className="btn btn-secondary min-h-10 flex-1 px-3 py-2 text-sm"
                                             >
                                                 View
                                             </a>

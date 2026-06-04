@@ -1,13 +1,18 @@
 import { PrismaClient } from '@prisma/client';
+import { requireDebugScript } from './debug-guard.mjs';
+
+requireDebugScript({ name: 'debug-expiry', requiredEnv: ['DEBUG_EXPIRY_EVENT_QUERY'] });
+
 const p = new PrismaClient();
 
 const now = new Date();
 console.log('Current time:', now.toISOString());
 
-// Check tickets for the MR BUSY event  
+const eventQuery = process.env.DEBUG_EXPIRY_EVENT_QUERY;
+
 const tickets = await p.ticket.findMany({
   where: {
-    order: { registration: { event: { title: { contains: 'MINISTORR' } } }, status: 'PAID' }
+    order: { registration: { event: { title: { contains: eventQuery } } }, status: 'PAID' }
   },
   select: {
     id: true,

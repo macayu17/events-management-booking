@@ -2,6 +2,7 @@ import PDFDocument from 'pdfkit';
 import QRCode from 'qrcode';
 import path from 'path';
 import fs from 'fs';
+import fsp from 'fs/promises';
 import https from 'https';
 import http from 'http';
 import { fileURLToPath } from 'url';
@@ -9,6 +10,7 @@ import prisma from '../config/db.js';
 import { generateQRPayload } from '../utils/qr.util.js';
 import { isCloudinaryConfigured, uploadPdfToCloudinary } from '../utils/cloudinary.util.js';
 import { isR2Configured, uploadBufferToR2 } from '../utils/r2.util.js';
+import { resolveLocalUploadPath } from '../utils/local-upload-path.util.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -32,19 +34,35 @@ const hasUsableQrPayload = (payload, ticket, order) => {
   );
 };
 
+const isUniqueConstraintError = (error) => error?.code === 'P2002';
+
 async function ensureTicketWithQr(order) {
   let ticket = await prisma.ticket.findUnique({
     where: { orderId: order.id }
   });
 
   if (!ticket) {
-    ticket = await prisma.ticket.create({
-      data: {
-        orderId: order.id,
-        qrPayload: '{}',
-        validUntil: order.registration.event.endTime
+    try {
+      ticket = await prisma.ticket.create({
+        data: {
+          orderId: order.id,
+          qrPayload: '{}',
+          validUntil: order.registration.event.endTime
+        }
+      });
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) {
+        throw error;
       }
-    });
+
+      ticket = await prisma.ticket.findUnique({
+        where: { orderId: order.id }
+      });
+
+      if (!ticket) {
+        throw error;
+      }
+    }
   }
 
   const parsedPayload = parseQrPayloadSafe(ticket.qrPayload);
@@ -165,28 +183,127 @@ const hexToRgb = (hex) => {
   ] : [0, 0, 0];
 };
 
-// Fetch image from URL
-const fetchImage = async (url) => {
-  if (!url) return null;
+const MAX_TICKET_IMAGE_BYTES = 5 * 1024 * 1024;
+const TICKET_IMAGE_TIMEOUT_MS = 2000;
+const TICKET_IMAGE_CACHE_LIMIT = 40;
+const TICKET_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+const ticketImageCache = new Map();
+
+const getCachedTicketImage = (key) => {
+  const buffer = ticketImageCache.get(key);
+  if (!buffer) return null;
+  ticketImageCache.delete(key);
+  ticketImageCache.set(key, buffer);
+  return buffer;
+};
+
+const rememberTicketImage = (key, buffer) => {
+  if (!buffer || buffer.length > MAX_TICKET_IMAGE_BYTES) return buffer;
+  ticketImageCache.set(key, buffer);
+  while (ticketImageCache.size > TICKET_IMAGE_CACHE_LIMIT) {
+    ticketImageCache.delete(ticketImageCache.keys().next().value);
+  }
+  return buffer;
+};
+
+const isAllowedTicketImageUrl = (value) => {
   try {
-    const protocol = url.startsWith('https') ? https : http;
-    return await new Promise((resolve, reject) => {
-      protocol.get(url, (response) => {
-        if (response.statusCode === 301 || response.statusCode === 302) {
-          // Handle redirects
-          fetchImage(response.headers.location).then(resolve).catch(reject);
+    const url = new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol)) return false;
+
+    if (url.hostname === 'res.cloudinary.com' || url.hostname.endsWith('.cloudinary.com')) {
+      return true;
+    }
+
+    const bucket = process.env.S3_BUCKET_NAME;
+    const region = process.env.AWS_REGION || 'us-east-1';
+    const allowedS3Hosts = new Set([
+      bucket ? `${bucket}.s3.amazonaws.com` : null,
+      bucket ? `${bucket}.s3.${region}.amazonaws.com` : null,
+    ].filter(Boolean));
+
+    return allowedS3Hosts.has(url.hostname);
+  } catch {
+    return false;
+  }
+};
+
+const fetchRemoteTicketImage = async (url, redirectsRemaining = 2) => {
+  if (!isAllowedTicketImageUrl(url)) return null;
+
+  const parsedUrl = new URL(url);
+  const protocol = parsedUrl.protocol === 'https:' ? https : http;
+
+  return new Promise((resolve) => {
+    const request = protocol.get(parsedUrl, (response) => {
+      if ([301, 302, 303, 307, 308].includes(response.statusCode)) {
+        response.resume();
+        const nextUrl = response.headers.location ? new URL(response.headers.location, parsedUrl).toString() : null;
+        if (!nextUrl || redirectsRemaining <= 0 || !isAllowedTicketImageUrl(nextUrl)) {
+          resolve(null);
           return;
         }
-        const chunks = [];
-        response.on('data', chunk => chunks.push(chunk));
-        response.on('end', () => resolve(Buffer.concat(chunks)));
-        response.on('error', reject);
-      }).on('error', reject);
+        fetchRemoteTicketImage(nextUrl, redirectsRemaining - 1).then(resolve);
+        return;
+      }
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        response.resume();
+        resolve(null);
+        return;
+      }
+
+      const chunks = [];
+      let totalBytes = 0;
+      response.on('data', (chunk) => {
+        totalBytes += chunk.length;
+        if (totalBytes > MAX_TICKET_IMAGE_BYTES) {
+          request.destroy();
+          resolve(null);
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on('end', () => resolve(Buffer.concat(chunks)));
+      response.on('error', () => resolve(null));
     });
-  } catch (err) {
-    console.error('Failed to fetch image:', err);
-    return null;
+
+    request.setTimeout(TICKET_IMAGE_TIMEOUT_MS, () => {
+      request.destroy();
+      resolve(null);
+    });
+    request.on('error', () => resolve(null));
+  });
+};
+
+// Fetch only server-owned images for ticket rendering.
+const fetchImage = async (imageRef) => {
+  if (!imageRef) return null;
+  const value = String(imageRef).trim();
+
+  if (value.startsWith('/uploads/')) {
+    try {
+      const localPath = resolveLocalUploadPath(value, { allowedExtensions: TICKET_IMAGE_EXTENSIONS });
+      const stats = await fsp.stat(localPath);
+      if (stats.size > MAX_TICKET_IMAGE_BYTES) return null;
+      const cacheKey = `local:${value}:${stats.size}:${stats.mtimeMs}`;
+      const cached = getCachedTicketImage(cacheKey);
+      if (cached) return cached;
+      const buffer = await fsp.readFile(localPath);
+      return rememberTicketImage(cacheKey, buffer);
+    } catch {
+      return null;
+    }
   }
+
+  if (value.startsWith('http://') || value.startsWith('https://')) {
+    const cacheKey = `remote:${value}`;
+    const cached = getCachedTicketImage(cacheKey);
+    if (cached) return cached;
+    return rememberTicketImage(cacheKey, await fetchRemoteTicketImage(value));
+  }
+
+  return null;
 };
 
 // Draw rounded rectangle
@@ -406,7 +523,7 @@ async function drawPremiumTicket(doc, ticket, order, qrCodeBuffer) {
     color: ink
   });
   doc.font(fontFamily).fontSize(9.5).fillColor(muted)
-    .text(model.attendeeEmail, detailsX, mainY + 134, { width: detailsW, ellipsis: true });
+    .text(model.attendeeEmail, detailsX, mainY + 134, { width: detailsW, height: 16, ellipsis: true });
 
   const pillY = mainY + 162;
   drawPill(doc, detailsX, pillY, detailsW, model.tierName, model.priceLabel, fontFamily, fontBold, primaryColor, ink);
@@ -447,7 +564,7 @@ function drawInfoBlock(doc, x, y, width, label, value, fontFamily, fontBold, pri
   doc.font(fontBold).fontSize(8).fillColor(primaryColor)
     .text(label, x + 16, y + 15, { width: width - 32, characterSpacing: 1.4 });
   doc.font(fontBold).fontSize(11.5).fillColor(accentColor)
-    .text(value, x + 16, y + 36, { width: width - 32, lineGap: 2, ellipsis: true });
+    .text(value, x + 16, y + 36, { width: width - 32, height: 34, lineGap: 2, ellipsis: true });
   doc.font(fontFamily).fontSize(1).fillColor(muted);
 }
 
@@ -469,6 +586,7 @@ function fitText(doc, text, x, y, width, maxHeight, options) {
   doc.font(options.font).fontSize(size).fillColor(options.color)
     .text(text, x, y, {
       width,
+      height: maxHeight,
       lineGap: options.lineGap || 0,
       ellipsis: true
     });
@@ -480,11 +598,11 @@ function drawPill(doc, x, y, width, leftText, rightText, fontFamily, fontBold, p
   doc.font(fontBold).fontSize(8).fillColor(primaryColor)
     .text('PASS TYPE', x + 16, y + 9, { width: width / 2 - 20, characterSpacing: 1.2 });
   doc.font(fontBold).fontSize(12).fillColor(ink)
-    .text(leftText, x + 16, y + 23, { width: width / 2 - 20, ellipsis: true });
+    .text(leftText, x + 16, y + 23, { width: width / 2 - 20, height: 22, ellipsis: true });
   doc.font(fontFamily).fontSize(8).fillColor('#7e746b')
     .text('PRICE', x + width / 2, y + 9, { width: width / 2 - 16, align: 'right', characterSpacing: 1.2 });
   doc.font(fontBold).fontSize(12).fillColor(ink)
-    .text(rightText, x + width / 2, y + 23, { width: width / 2 - 16, align: 'right' });
+    .text(rightText, x + width / 2, y + 23, { width: width / 2 - 16, height: 16, align: 'right', ellipsis: true });
 }
 
 export async function renderTicketPDFBuffer(order, ticket) {

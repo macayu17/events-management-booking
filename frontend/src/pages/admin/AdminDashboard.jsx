@@ -1,23 +1,32 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Calendar, Users, IndianRupee, TrendingUp, Shield } from 'lucide-react';
+import { Calendar, Users, IndianRupee, TrendingUp, Shield, Megaphone } from 'lucide-react';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../context/AuthContext';
+import { ErrorState, LoadingBlock } from '../../components/StateBlock';
 
 import BroadcastModal from '../../components/BroadcastModal';
+
+const defaultStats = {
+  totalEvents: 0,
+  publishedEvents: 0,
+  totalRegistrations: 0,
+  totalRevenue: 0
+};
+
+const toFiniteNumber = (value, fallback = 0) => {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+};
 
 export default function AdminDashboard() {
   const { user } = useAuth();
   const [isBroadcastOpen, setIsBroadcastOpen] = useState(false);
-  const [stats, setStats] = useState({
-    totalEvents: 0,
-    publishedEvents: 0,
-    totalRegistrations: 0,
-    totalRevenue: 0
-  });
+  const [stats, setStats] = useState(defaultStats);
   const [recentEvents, setRecentEvents] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
 
   const isAdmin = user?.role === 'ADMIN';
 
@@ -26,19 +35,22 @@ export default function AdminDashboard() {
   }, []);
 
   const fetchDashboardData = async () => {
+    setLoading(true);
+    setLoadError('');
+
     try {
       const response = await api.get('/admin/events');
-      const events = response.data;
+      const events = Array.isArray(response.data) ? response.data : [];
 
       setRecentEvents(events.slice(0, 5));
 
       const totalRegistrations = events.reduce(
-        (sum, event) => sum + (event._count?.registrations || 0),
+        (sum, event) => sum + toFiniteNumber(event._count?.registrations),
         0
       );
 
       const totalRevenue = events.reduce(
-        (sum, event) => sum + (event._count?.registrations || 0) * event.priceCents,
+        (sum, event) => sum + toFiniteNumber(event._count?.registrations) * toFiniteNumber(event.priceCents),
         0
       );
 
@@ -49,30 +61,44 @@ export default function AdminDashboard() {
         totalRevenue: totalRevenue / 100
       });
     } catch (error) {
-      toast.error('Failed to fetch dashboard data');
+      const message = error.response?.data?.error || 'Failed to load dashboard data';
+      setLoadError(message);
+      setRecentEvents([]);
+      setStats(defaultStats);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
   };
 
   if (loading) {
+    return <LoadingBlock title="Loading dashboard" message="Fetching admin totals and recent events." />;
+  }
+
+  if (loadError) {
     return (
-      <div className="flex justify-center py-20">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-[#E23744] border-r-2 border-[#E23744]/30"></div>
-      </div>
+      <ErrorState
+        title="Could not load dashboard"
+        message={loadError}
+        action={(
+          <button type="button" onClick={fetchDashboardData} className="admin-primary-action">
+            Retry
+          </button>
+        )}
+      />
     );
   }
 
   return (
     <div className="space-y-8 animate-fade-in">
-      <div className="flex items-end justify-between">
-        <div>
-          <div className="flex items-center gap-3 mb-2">
-            <h1 className="text-3xl font-bold text-white">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex min-w-0 flex-wrap items-center gap-3 mb-2">
+            <h1 className="min-w-0 truncate text-3xl font-bold text-white">
               {isAdmin ? 'Super Admin Overview' : 'My Overview'}
             </h1>
             {isAdmin && (
-              <span className="px-2 py-1 text-xs font-medium bg-purple-500/20 text-purple-400 border border-purple-500/30 rounded-full flex items-center gap-1">
+              <span className="admin-chip border-[#E23744]/30 bg-[#E23744]/10 text-[#f2e7d8] flex items-center gap-1">
                 <Shield size={12} /> ADMIN
               </span>
             )}
@@ -85,9 +111,10 @@ export default function AdminDashboard() {
         </div>
         <button
           onClick={() => setIsBroadcastOpen(true)}
-          className="btn btn-primary"
+          className="admin-primary-action inline-flex w-full items-center justify-center gap-2 sm:w-auto"
         >
-          📢 Broadcast Email
+          <Megaphone size={16} />
+          Broadcast Email
         </button>
       </div>
 
@@ -99,30 +126,30 @@ export default function AdminDashboard() {
           icon={Calendar}
           label={isAdmin ? "All Events" : "Total Events"}
           value={stats.totalEvents}
-          color="blue"
+          tone="brand"
         />
         <StatCard
           icon={TrendingUp}
           label="Published"
           value={stats.publishedEvents}
-          color="green"
+          tone="success"
         />
         <StatCard
           icon={Users}
           label="Registrations"
           value={stats.totalRegistrations}
-          color="purple"
+          tone="neutral"
         />
         <StatCard
           icon={IndianRupee}
           label="Total Revenue"
           value={`₹${stats.totalRevenue.toFixed(2)}`}
-          color="yellow"
+          tone="warn"
         />
       </div>
 
       {/* Recent Events */}
-      <div className="glass-card p-6 rounded-2xl bg-[#18181b]/60 border border-white/5">
+      <div className="admin-card p-5 sm:p-6">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-xl font-bold text-white">
             {isAdmin ? 'All Recent Events' : 'Recent Events'}
@@ -138,7 +165,7 @@ export default function AdminDashboard() {
               <Calendar className="text-gray-500" size={24} />
             </div>
             <p className="text-gray-400 mb-4">No events created yet</p>
-            <Link to="/admin/events/create" className="btn btn-primary inline-flex">
+            <Link to="/admin/events/create" className="admin-primary-action inline-flex">
               Create Event
             </Link>
           </div>
@@ -147,26 +174,26 @@ export default function AdminDashboard() {
             {recentEvents.map((event) => (
               <div
                 key={event.id}
-                className="flex items-center justify-between p-4 rounded-xl hover:bg-white/5 transition-colors border border-transparent hover:border-white/5 group"
+                className="flex flex-col gap-3 p-4 rounded-xl hover:bg-white/5 transition-colors border border-transparent hover:border-white/5 group sm:flex-row sm:items-center sm:justify-between"
               >
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <h3 className="font-semibold text-white group-hover:text-[#E23744] transition-colors mb-1">{event.title}</h3>
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
+                    <h3 className="min-w-0 truncate font-semibold text-white group-hover:text-[#E23744] transition-colors sm:mb-1">{event.title}</h3>
                     {isAdmin && event.organizer && (
-                      <span className="text-xs text-gray-500 bg-gray-800 px-2 py-0.5 rounded">
+                      <span className="admin-chip max-w-full truncate border-white/10 bg-white/[0.04] text-[#aaa096] normal-case tracking-normal sm:max-w-[14rem]">
                         by {event.organizer.name || event.organizer.email}
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center text-sm text-gray-500 gap-4">
-                    <span>{event.location}</span>
-                    <span>•</span>
+                  <div className="flex min-w-0 items-center text-sm text-gray-500 gap-3">
+                    <span className="min-w-0 truncate">{event.location}</span>
+                    <span className="shrink-0">•</span>
                     <span className={event.published ? 'text-green-500' : 'text-yellow-500'}>
                       {event.published ? 'Published' : 'Draft'}
                     </span>
                   </div>
                 </div>
-                <div className="text-right">
+                <div className="shrink-0 text-right">
                   <div className="text-2xl font-bold text-gray-200">{event._count?.registrations || 0}</div>
                   <div className="text-xs text-gray-500 uppercase tracking-wider">Sold</div>
                 </div>
@@ -179,25 +206,23 @@ export default function AdminDashboard() {
   );
 }
 
-function StatCard({ icon: Icon, label, value, color }) {
-  // Simplistic color map consistent with dark theme
-  const colors = {
-    blue: 'text-blue-500 bg-blue-500/10',
-    green: 'text-emerald-500 bg-emerald-500/10',
-    purple: 'text-purple-500 bg-purple-500/10',
-    yellow: 'text-yellow-500 bg-yellow-500/10'
+function StatCard({ icon: Icon, label, value, tone }) {
+  const tones = {
+    brand: 'text-[#E23744] bg-[#E23744]/10 border-[#E23744]/20',
+    success: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
+    neutral: 'text-[#f2e7d8] bg-[#f2e7d8]/10 border-white/10',
+    warn: 'text-amber-400 bg-amber-500/10 border-amber-500/20'
   };
 
   return (
-    <div className="glass-card p-6 rounded-2xl bg-[#18181b]/60 border border-white/5 flex items-center justify-between">
-      <div>
+    <div className="admin-card admin-card-hover p-5 sm:p-6 flex items-center justify-between gap-4 min-w-0">
+      <div className="min-w-0">
         <p className="text-sm font-medium text-gray-400 mb-1">{label}</p>
-        <p className="text-2xl font-bold text-white">{value}</p>
+        <p className="text-2xl font-bold text-white truncate">{value}</p>
       </div>
-      <div className={`p-3 rounded-xl ${colors[color]}`}>
+      <div className={`p-3 rounded-xl border ${tones[tone] || tones.neutral}`}>
         <Icon size={24} />
       </div>
     </div>
   );
 }
-

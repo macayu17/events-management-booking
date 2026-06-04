@@ -5,7 +5,7 @@ import api from '../utils/api';
 import toast from 'react-hot-toast';
 
 export default function PollCard({ poll, userEmail, onVoted }) {
-    const [selectedOption, setSelectedOption] = useState(null);
+    const [selectedOptions, setSelectedOptions] = useState([]);
     const [hasVoted, setHasVoted] = useState(false);
     const [showResults, setShowResults] = useState(false);
     const [results, setResults] = useState(null);
@@ -14,10 +14,24 @@ export default function PollCard({ poll, userEmail, onVoted }) {
 
     const isExpired = poll.endsAt && new Date(poll.endsAt) < new Date();
     const totalVotes = poll.options?.reduce((sum, opt) => sum + (opt._count?.votes || 0), 0) || 0;
+    const allowMultiple = Boolean(poll.allowMultiple);
+
+    const toggleOption = (optionId) => {
+        if (!allowMultiple) {
+            setSelectedOptions([optionId]);
+            return;
+        }
+
+        setSelectedOptions((current) => (
+            current.includes(optionId)
+                ? current.filter((id) => id !== optionId)
+                : [...current, optionId]
+        ));
+    };
 
     const handleVote = async () => {
-        if (!selectedOption) {
-            toast.error('Please select an option');
+        if (selectedOptions.length === 0) {
+            toast.error('Please select at least one option');
             return;
         }
         if (!email || !email.includes('@')) {
@@ -28,7 +42,7 @@ export default function PollCard({ poll, userEmail, onVoted }) {
         setVoting(true);
         try {
             await api.post(`/polls/${poll.id}/vote`, {
-                optionId: selectedOption,
+                ...(allowMultiple ? { optionIds: selectedOptions } : { optionId: selectedOptions[0] }),
                 voterEmail: email
             });
             toast.success('Vote recorded!');
@@ -99,49 +113,77 @@ export default function PollCard({ poll, userEmail, onVoted }) {
                 </div>
             ) : (
                 <div className="space-y-2">
-                    {poll.options?.map(opt => (
-                        <button
-                            key={opt.id}
-                            onClick={() => setSelectedOption(opt.id)}
-                            disabled={isExpired}
-                            className={`w-full text-left px-4 py-3 rounded-lg border transition-all ${selectedOption === opt.id
-                                    ? 'border-[#E23744] bg-[#E23744]/10 text-white'
-                                    : 'border-white/10 text-gray-300 hover:border-white/20 hover:bg-white/5'
-                                } ${isExpired ? 'opacity-50 cursor-not-allowed' : ''}`}
-                        >
-                            <div className="flex items-center gap-3">
-                                <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${selectedOption === opt.id ? 'border-[#E23744] bg-[#E23744]' : 'border-gray-500'
-                                    }`}>
-                                    {selectedOption === opt.id && <Check size={10} className="text-white" />}
-                                </div>
-                                <span className="text-sm">{opt.text}</span>
-                            </div>
-                        </button>
-                    ))}
+                    <fieldset className="space-y-2" disabled={isExpired}>
+                        <legend className="sr-only">{poll.question}</legend>
+                        {allowMultiple && (
+                            <p className="text-xs font-medium text-gray-400">
+                                Choose one or more options.
+                            </p>
+                        )}
+                        {poll.options?.map(opt => {
+                            const optionId = `poll-${poll.id}-option-${opt.id}`;
+                            const checked = selectedOptions.includes(opt.id);
+
+                            return (
+                                <label
+                                    key={opt.id}
+                                    htmlFor={optionId}
+                                    className={`block w-full cursor-pointer rounded-lg border px-4 py-3 text-left transition-all focus-within:ring-2 focus-within:ring-[#E23744] focus-within:ring-offset-2 focus-within:ring-offset-[#18181b] ${checked
+                                            ? 'border-[#E23744] bg-[#E23744]/10 text-white'
+                                            : 'border-white/10 text-gray-300 hover:border-white/20 hover:bg-white/5'
+                                        } ${isExpired ? 'cursor-not-allowed opacity-50' : ''}`}
+                                >
+                                    <input
+                                        id={optionId}
+                                        type={allowMultiple ? 'checkbox' : 'radio'}
+                                        name={`poll-${poll.id}`}
+                                        value={opt.id}
+                                        checked={checked}
+                                        onChange={() => toggleOption(opt.id)}
+                                        className="sr-only"
+                                    />
+                                    <span className="flex items-center gap-3">
+                                        <span className={`flex h-4 w-4 items-center justify-center border-2 ${allowMultiple ? 'rounded' : 'rounded-full'} ${checked ? 'border-[#E23744] bg-[#E23744]' : 'border-gray-500'}`}>
+                                            {checked && <Check size={10} className="text-white" aria-hidden="true" />}
+                                        </span>
+                                        <span className="text-sm">{opt.text}</span>
+                                    </span>
+                                </label>
+                            );
+                        })}
+                    </fieldset>
 
                     {/* Email input if not provided */}
                     {!userEmail && !isExpired && (
-                        <input
-                            type="email"
-                            placeholder="Your email to vote"
-                            value={email}
-                            onChange={e => setEmail(e.target.value)}
-                            className="input w-full mt-3"
-                        />
+                        <div className="mt-3">
+                            <label htmlFor={`poll-${poll.id}-email`} className="sr-only">Email address for voting</label>
+                            <input
+                                id={`poll-${poll.id}-email`}
+                                name={`poll-${poll.id}-email`}
+                                type="email"
+                                autoComplete="email"
+                                placeholder="Your email to vote"
+                                value={email}
+                                onChange={e => setEmail(e.target.value)}
+                                className="input w-full"
+                            />
+                        </div>
                     )}
 
                     {/* Vote / View Results buttons */}
                     <div className="flex gap-2 mt-4">
                         {!isExpired && (
                             <button
+                                type="button"
                                 onClick={handleVote}
-                                disabled={voting || !selectedOption}
+                                disabled={voting || selectedOptions.length === 0}
                                 className="btn btn-primary flex-1"
                             >
-                                {voting ? 'Voting...' : 'Vote'}
+                                {voting ? 'Voting...' : allowMultiple ? 'Submit votes' : 'Vote'}
                             </button>
                         )}
                         <button
+                            type="button"
                             onClick={fetchResults}
                             className="btn btn-secondary flex-1"
                         >

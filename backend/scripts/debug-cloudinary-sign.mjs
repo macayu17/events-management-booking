@@ -1,5 +1,8 @@
 import 'dotenv/config';
 import { v2 as cloudinary } from 'cloudinary';
+import { formatDebugUrl, requireDebugScript } from './debug-guard.mjs';
+
+requireDebugScript({ name: 'debug-cloudinary-sign', requiredEnv: ['CLOUDINARY_DEBUG_URL'] });
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -7,7 +10,7 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-const url = 'https://res.cloudinary.com/dkymmvuv5/raw/authenticated/s--5OULgmzH--/v1/occasio/events/certificates/pl5ckz0w3dswjmpne434.pdf?_a=BAMAMieC0';
+const url = process.env.CLOUDINARY_DEBUG_URL;
 
 // Extract public ID
 const urlObj = new URL(url);
@@ -26,7 +29,7 @@ const signedUrl1 = cloudinary.url(publicIdNoExt, {
   resource_type: 'raw', type: 'authenticated', sign_url: true,
   expires_at: Math.floor(Date.now() / 1000) + (365 * 24 * 60 * 60)
 });
-console.log('\nTest 1 - Signed URL (no ext):', signedUrl1);
+console.log('\nTest 1 - Signed URL (no ext):', formatDebugUrl(signedUrl1));
 const r1 = await fetch(signedUrl1);
 console.log('  Status:', r1.status, r1.statusText);
 
@@ -35,7 +38,7 @@ const signedUrl2 = cloudinary.url(publicId, {
   resource_type: 'raw', type: 'authenticated', sign_url: true,
   expires_at: Math.floor(Date.now() / 1000) + (365 * 24 * 60 * 60)
 });
-console.log('\nTest 2 - Signed URL (with ext):', signedUrl2);
+console.log('\nTest 2 - Signed URL (with ext):', formatDebugUrl(signedUrl2));
 const r2 = await fetch(signedUrl2);
 console.log('  Status:', r2.status, r2.statusText);
 
@@ -48,7 +51,7 @@ try {
   console.log('Not found (no ext):', err?.error?.message || err.message);
 }
 
-// Test 4: List resources in folder  
+// Test 4: List resources in folder
 console.log('\n--- Listing resources in folder ---');
 try {
   const result = await cloudinary.api.resources({

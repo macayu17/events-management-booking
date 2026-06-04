@@ -4,6 +4,7 @@ import prisma from '../config/db.js';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { escapeHtml, escapeHtmlWithLineBreaks, sanitizeBasicHtml, sanitizeEmailSubject } from '../utils/html.util.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -114,7 +115,7 @@ export async function sendTicketEmail(ticketId, email) {
     const mailOptions = {
       from: process.env.EMAIL_FROM,
       to: email,
-      subject: `Your Ticket for ${event.title}`,
+      subject: sanitizeEmailSubject(`Your Ticket for ${event.title}`),
       html: generateEmailHTML(event, attendee, ticket),
       attachments
     };
@@ -129,7 +130,13 @@ export async function sendTicketEmail(ticketId, email) {
   }
 }
 
-function generateEmailHTML(event, attendee, ticket) {
+export function generateEmailHTML(event, attendee, ticket) {
+  const attendeeName = escapeHtml(attendee.name || 'there');
+  const eventTitle = escapeHtml(event.title);
+  const eventLocation = escapeHtml(event.location);
+  const eventStartTime = escapeHtml(new Date(event.startTime).toLocaleString());
+  const ticketShortId = escapeHtml(ticket.id.substring(0, 8).toUpperCase());
+
   return `
     <!DOCTYPE html>
     <html>
@@ -199,27 +206,27 @@ function generateEmailHTML(event, attendee, ticket) {
       </div>
 
       <div class="content">
-        <p>Hi ${attendee.name || 'there'},</p>
+        <p>Hi ${attendeeName},</p>
 
-        <p>Thank you for registering! Your ticket for <strong>${event.title}</strong> has been confirmed.</p>
+        <p>Thank you for registering! Your ticket for <strong>${eventTitle}</strong> has been confirmed.</p>
 
         <div class="event-details">
           <h3>Event Details</h3>
           <div class="detail-row">
             <span class="detail-label">Event:</span>
-            <span>${event.title}</span>
+            <span>${eventTitle}</span>
           </div>
           <div class="detail-row">
             <span class="detail-label">Location:</span>
-            <span>${event.location}</span>
+            <span>${eventLocation}</span>
           </div>
           <div class="detail-row">
             <span class="detail-label">Date & Time:</span>
-            <span>${new Date(event.startTime).toLocaleString()}</span>
+            <span>${eventStartTime}</span>
           </div>
           <div class="detail-row">
             <span class="detail-label">Ticket ID:</span>
-            <span>${ticket.id.substring(0, 8).toUpperCase()}</span>
+            <span>${ticketShortId}</span>
           </div>
         </div>
 
@@ -243,7 +250,7 @@ export async function sendWelcomeEmail(email, name) {
     to: email,
     subject: 'Welcome to Event Management System',
     html: `
-      <h1>Welcome, ${name}!</h1>
+      <h1>Welcome, ${escapeHtml(name)}!</h1>
       <p>Thank you for joining our event management platform.</p>
       <p>You can now start exploring and registering for amazing events!</p>
     `
@@ -256,11 +263,38 @@ export async function sendCustomEmail(to, subject, html) {
   const mailOptions = {
     from: process.env.EMAIL_FROM,
     to: to, // Can be array or single string
-    subject: subject,
-    html: html
+    subject: sanitizeEmailSubject(subject),
+    html: sanitizeBasicHtml(html)
   };
 
   return getTransporter().sendMail(mailOptions);
+}
+
+export async function sendTextEmail(to, subject, text) {
+  const mailOptions = {
+    from: process.env.EMAIL_FROM,
+    to,
+    subject: sanitizeEmailSubject(subject),
+    html: `<p>${escapeHtmlWithLineBreaks(text)}</p>`
+  };
+
+  return getTransporter().sendMail(mailOptions);
+}
+
+export function generateCertificateEmailHTML(userName, eventName, certificateType = 'Participation') {
+  const safeUserName = escapeHtml(userName);
+  const safeEventName = escapeHtml(eventName);
+  const safeCertificateType = escapeHtml(certificateType);
+
+  return `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+          <h1>Hi ${safeUserName},</h1>
+          <p>Thank you for being part of <strong>${safeEventName}</strong>.</p>
+          <p>Please find your <strong>Certificate of ${safeCertificateType}</strong> attached to this email.</p>
+          <br>
+          <p>Best regards,<br>The Occasio Team</p>
+        </div>
+      `;
 }
 
 export async function sendCertificateEmail(toEmail, userName, eventName, pdfBuffer, certificateType = 'Participation') {
@@ -268,19 +302,11 @@ export async function sendCertificateEmail(toEmail, userName, eventName, pdfBuff
     await getTransporter().sendMail({
       from: `"Occasio Events" <${process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER || 'noreply@occasio.io'}>`,
       to: toEmail,
-      subject: `Certificate of ${certificateType} - ${eventName}`,
-      html: `
-        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
-          <h1>Hi ${userName},</h1>
-          <p>Thank you for being part of <strong>${eventName}</strong>.</p>
-          <p>Please find your <strong>Certificate of ${certificateType}</strong> attached to this email.</p>
-          <br>
-          <p>Best regards,<br>The Occasio Team</p>
-        </div>
-      `,
+      subject: sanitizeEmailSubject(`Certificate of ${certificateType} - ${eventName}`),
+      html: generateCertificateEmailHTML(userName, eventName, certificateType),
       attachments: [
         {
-          filename: `${certificateType} Certificate - ${eventName}.pdf`,
+          filename: `${sanitizeEmailSubject(certificateType, 'Certificate')} Certificate - ${sanitizeEmailSubject(eventName, 'Event')}.pdf`,
           content: pdfBuffer,
           contentType: 'application/pdf'
         }

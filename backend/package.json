@@ -6,17 +6,24 @@
   "type": "module",
   "scripts": {
     "dev": "nodemon src/server.js",
-    "prestart": "npx prisma generate",
+    "prestart": "npm run prisma:generate",
     "start": "node src/server.js",
     "test": "node --test",
+    "payments:reconcile-phonepe": "node scripts/reconcile-phonepe-orders.mjs",
+    "payments:reconcile-razorpay": "node scripts/reconcile-razorpay-orders.mjs",
+    "payments:release-stale-checkouts": "node scripts/release-stale-checkout-reservations.mjs",
     "tickets:backfill": "node scripts/backfill-tickets.mjs",
+    "tickets:check": "node scripts/check-tickets.mjs",
+    "admin:set": "node scripts/set-admin.mjs",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate": "prisma migrate deploy",
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "prisma:migrate:dev": "prisma migrate dev",
     "prisma:studio": "prisma studio",
-    "postinstall": "echo 'Skipping postinstall prisma generate for Azure compatibility'"
+    "postinstall": "echo 'Install complete. Prisma generation runs through npm run prisma:generate/prestart for Azure compatibility.'"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.12.0"
   },
   "keywords": [
     "event",
@@ -35,7 +42,6 @@
     "bullmq": "^5.1.0",
     "cloudinary": "^2.8.0",
     "cors": "^2.8.5",
-    "crypto": "^1.0.1",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "express-rate-limit": "^7.1.5",
@@ -51,7 +57,6 @@
     "prisma": "^6.19.0",
     "qrcode": "^1.5.3",
     "razorpay": "^2.9.2",
-    "stripe": "^14.7.0",
     "twilio": "^5.11.2",
     "web-push": "^3.6.7"
   },

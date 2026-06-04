@@ -1,18 +1,15 @@
 import express from 'express';
 import prisma from '../config/db.js';
 import { authenticate, checkEventAccess } from '../middleware/auth.middleware.js';
+import { verifyTeamInviteToken } from '../utils/team-invite-token.util.js';
+import { mapCheckInFailure, mapCheckOutFailure, sendMappedFailure } from '../utils/checkin-response.util.js';
+import { isTicketExpired, markTicketCheckedIn, markTicketCheckedOut } from '../services/checkin.service.js';
 
 const router = express.Router();
 
 const CHECK_IN_ROLES = ['SUPER_MANAGER', 'MANAGER', 'SCANNER'];
 const ANALYTICS_ROLES = ['SUPER_MANAGER', 'MANAGER'];
 const EDIT_ROLES = ['SUPER_MANAGER', 'MANAGER'];
-
-const isTicketExpired = (ticket) => {
-    if (!ticket.validUntil) return false;
-    const graceEnd = new Date(ticket.validUntil.getTime() + 24 * 60 * 60 * 1000);
-    return new Date() > graceEnd;
-};
 
 // All routes require authentication
 router.use(authenticate);
@@ -25,8 +22,12 @@ router.use(authenticate);
 // Get all events user is invited to as team member
 router.get('/events', async (req, res) => {
     try {
+        const { event: invitedEventId, invite } = req.query;
         const teamMemberships = await prisma.teamMember.findMany({
-            where: { email: req.user.email },
+            where: {
+                email: req.user.email,
+                acceptedAt: { not: null }
+            },
             include: {
                 event: {
                     include: {
@@ -41,6 +42,32 @@ router.get('/events', async (req, res) => {
             },
             orderBy: { invitedAt: 'desc' }
         });
+
+        if (invitedEventId && invite) {
+            const pendingMembership = await prisma.teamMember.findUnique({
+                where: { eventId_email: { eventId: String(invitedEventId), email: req.user.email } },
+                include: {
+                    event: {
+                        include: {
+                            organizer: {
+                                select: { name: true, email: true }
+                            },
+                            _count: {
+                                select: { registrations: true }
+                            }
+                        }
+                    }
+                }
+            });
+
+            if (
+                pendingMembership &&
+                !pendingMembership.acceptedAt &&
+                verifyTeamInviteToken(String(invite), pendingMembership)
+            ) {
+                teamMemberships.unshift(pendingMembership);
+            }
+        }
 
         const events = teamMemberships.map(tm => ({
             ...tm.event,
@@ -257,52 +284,30 @@ router.post('/tickets/:ticketId/checkin', async (req, res) => {
         }
 
         if (ticket.revoked) {
-            return res.status(400).json({ error: 'Ticket has been revoked' });
+            return sendMappedFailure(res, mapCheckInFailure({ blockedReason: 'revoked' }));
         }
 
         if (isTicketExpired(ticket)) {
-            return res.status(400).json({ error: 'Ticket has expired' });
+            return sendMappedFailure(res, mapCheckInFailure({ blockedReason: 'expired' }));
         }
 
         if (ticket.scannedAt || ticket.checkedInAt) {
-            return res.status(400).json({
-                error: 'Already checked in',
-                checkedInAt: ticket.checkedInAt || ticket.scannedAt
-            });
+            return sendMappedFailure(res, mapCheckInFailure({
+                blockedReason: 'already-checked-in',
+                checkedInAt: ticket.checkedInAt,
+                scannedAt: ticket.scannedAt
+            }));
         }
 
-        const now = new Date();
-        const updateResult = await prisma.ticket.updateMany({
-            where: {
-                id: ticketId,
-                scannedAt: null,
-                checkedInAt: null
-            },
-            data: {
-                checkedInAt: now,
-                checkedInBy: req.user.id,
-                scannedAt: now
-            }
-        });
-
-        if (updateResult.count === 0) {
-            const currentTicket = await prisma.ticket.findUnique({
-                where: { id: ticketId },
-                select: { scannedAt: true, checkedInAt: true }
-            });
-
-            return res.status(400).json({
-                error: 'Already checked in',
-                checkedInAt: currentTicket?.checkedInAt || currentTicket?.scannedAt || now
-            });
+        const checkInResult = await markTicketCheckedIn(ticketId, req.user.id);
+        if (!checkInResult.checkedIn) {
+            return sendMappedFailure(res, mapCheckInFailure(checkInResult));
         }
-
-        const updatedTicket = await prisma.ticket.findUnique({ where: { id: ticketId } });
 
         res.json({
             success: true,
             message: 'Checked in successfully',
-            ticket: updatedTicket,
+            ticket: checkInResult.ticket,
             attendee: {
                 name: ticket.order.registration.formResponse?.name,
                 email: ticket.order.registration.userEmail
@@ -342,28 +347,19 @@ router.post('/tickets/:ticketId/checkout', async (req, res) => {
             return res.status(403).json({ error: access.error || 'Scanner access required' });
         }
 
-        if (!ticket.checkedInAt) {
-            return res.status(400).json({ error: 'Not checked in yet' });
+        if (ticket.order.status !== 'PAID') {
+            return res.status(400).json({ error: 'Ticket is not paid' });
         }
 
-        if (ticket.checkedOutAt) {
-            return res.status(400).json({
-                error: 'Already checked out',
-                checkedOutAt: ticket.checkedOutAt
-            });
+        const checkOutResult = await markTicketCheckedOut(ticketId);
+        if (!checkOutResult.success) {
+            return sendMappedFailure(res, mapCheckOutFailure(checkOutResult));
         }
-
-        const updatedTicket = await prisma.ticket.update({
-            where: { id: ticketId },
-            data: {
-                checkedOutAt: new Date()
-            }
-        });
 
         res.json({
             success: true,
             message: 'Checked out successfully',
-            ticket: updatedTicket
+            ticket: checkOutResult.ticket
         });
     } catch (error) {
         console.error('Team check-out error:', error);
@@ -386,6 +382,11 @@ router.post('/events/:id/accept', async (req, res) => {
 
         if (teamMember.acceptedAt) {
             return res.json({ message: 'Already accepted', teamMember });
+        }
+
+        const inviteToken = req.body?.inviteToken || req.query.invite;
+        if (!verifyTeamInviteToken(inviteToken, teamMember)) {
+            return res.status(403).json({ error: 'Valid invitation link required' });
         }
 
         const updated = await prisma.teamMember.update({

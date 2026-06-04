@@ -5,17 +5,55 @@ import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 import Dock from '../../components/Dock';
+import { ErrorState } from '../../components/StateBlock';
+import useConfirmDialog from '../../hooks/useConfirmDialog';
+
+const openPublicEvent = (eventId) => {
+  const preview = window.open(`/events/${eventId}`, '_blank', 'noopener,noreferrer');
+  if (preview) preview.opener = null;
+};
+
+const EVENT_ACTIONS = [
+  { id: 'view', label: 'View Public Page', dockLabel: 'Public', icon: Eye },
+  { id: 'edit', label: 'Edit Event', dockLabel: 'Edit', icon: Edit, quick: true },
+  { id: 'duplicate', label: 'Duplicate Event', dockLabel: 'Duplicate', icon: Copy },
+  { id: 'registrations', label: 'Registrations', dockLabel: 'Registrations', icon: Users, quick: true, dividerBefore: true },
+  { id: 'control', label: 'Control Center', dockLabel: 'Control', icon: Settings, highlight: true },
+  { id: 'analytics', label: 'Analytics', dockLabel: 'Analytics', icon: BarChart3 },
+  { id: 'discounts', label: 'Discounts', dockLabel: 'Discounts', icon: Tag },
+  { id: 'form', label: 'Form Builder', dockLabel: 'Form', icon: FileText },
+  {
+    id: 'toggle',
+    label: (event) => (event.published ? 'Unpublish' : 'Publish'),
+    dockLabel: (event) => (event.published ? 'Unpublish' : 'Publish'),
+    icon: (event) => (event.published ? EyeOff : Eye),
+    dividerBefore: true,
+  },
+  { id: 'delete', label: 'Delete Event', dockLabel: 'Delete', icon: Trash2, destructive: true },
+];
+
+const resolveActionText = (action, event, key = 'label') => {
+  const value = action[key] ?? action.label;
+  return typeof value === 'function' ? value(event) : value;
+};
+
+const resolveActionIcon = (action, event) => {
+  const Icon = typeof action.icon === 'function' ? action.icon(event) : action.icon;
+  return Icon;
+};
 
 export default function EventListPage() {
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [openMenuId, setOpenMenuId] = useState(null);
   const [selectedEventId, setSelectedEventId] = useState(null);
   const menuRef = useRef(null);
   const navigate = useNavigate();
+  const { confirm, dialog } = useConfirmDialog();
 
   useEffect(() => {
-    fetchEvents();
+    fetchEvents({ showSpinner: true });
   }, []);
 
   useEffect(() => {
@@ -40,11 +78,15 @@ export default function EventListPage() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const fetchEvents = async () => {
+  const fetchEvents = async ({ showSpinner = false } = {}) => {
+    if (showSpinner) setLoading(true);
+    setLoadError('');
+
     try {
       const response = await api.get('/admin/events');
       setEvents(response.data);
     } catch (error) {
+      setLoadError(error.response?.data?.error || 'Failed to fetch events');
       toast.error('Failed to fetch events');
     } finally {
       setLoading(false);
@@ -90,19 +132,25 @@ export default function EventListPage() {
         handleDuplicate(eventId);
         break;
       case 'view':
-        window.open(`/events/${eventId}`, '_blank');
+        openPublicEvent(eventId);
         break;
     }
   };
 
   const handleDelete = async (id) => {
-    if (!confirm('Are you sure you want to delete this event?')) return;
+    const event = events.find(item => item.id === id);
+    const confirmed = await confirm({
+      title: 'Delete event?',
+      message: `Delete "${event?.title || 'this event'}" and its editable setup data? Paid registrations and ticket history may block deletion.`,
+      confirmLabel: 'Delete event',
+    });
+    if (!confirmed) return;
     try {
       await api.delete(`/admin/events/${id}`);
       toast.success('Event deleted successfully');
       fetchEvents();
     } catch (error) {
-      toast.error('Failed to delete event');
+      toast.error(error.response?.data?.error || 'Failed to delete event');
     }
   };
 
@@ -142,58 +190,16 @@ export default function EventListPage() {
   };
 
   const selectedEvent = events.find(event => event.id === selectedEventId);
-  const dockItems = selectedEvent ? [
-    {
-      label: 'Public',
-      icon: <Eye size={20} />,
-      onClick: () => handleAction('view', selectedEvent.id)
-    },
-    {
-      label: 'Edit',
-      icon: <Edit size={20} />,
-      onClick: () => handleAction('edit', selectedEvent.id)
-    },
-    {
-      label: 'Registrations',
-      icon: <Users size={20} />,
-      onClick: () => handleAction('registrations', selectedEvent.id)
-    },
-    {
-      label: 'Control',
-      icon: <Settings size={20} />,
-      onClick: () => handleAction('control', selectedEvent.id)
-    },
-    {
-      label: 'Analytics',
-      icon: <BarChart3 size={20} />,
-      onClick: () => handleAction('analytics', selectedEvent.id)
-    },
-    {
-      label: 'Discounts',
-      icon: <Tag size={20} />,
-      onClick: () => handleAction('discounts', selectedEvent.id)
-    },
-    {
-      label: 'Form',
-      icon: <FileText size={20} />,
-      onClick: () => handleAction('form', selectedEvent.id)
-    },
-    {
-      label: 'Duplicate',
-      icon: <Copy size={20} />,
-      onClick: () => handleAction('duplicate', selectedEvent.id)
-    },
-    {
-      label: selectedEvent.published ? 'Unpublish' : 'Publish',
-      icon: selectedEvent.published ? <EyeOff size={20} /> : <Eye size={20} />,
-      onClick: () => handleAction('toggle', selectedEvent.id)
-    },
-    {
-      label: 'Delete',
-      icon: <Trash2 size={20} />,
-      onClick: () => handleAction('delete', selectedEvent.id)
-    }
-  ] : [];
+  const dockItems = selectedEvent
+    ? EVENT_ACTIONS.map((action) => {
+        const Icon = resolveActionIcon(action, selectedEvent);
+        return {
+          label: resolveActionText(action, selectedEvent, 'dockLabel'),
+          icon: <Icon size={20} />,
+          onClick: () => handleAction(action.id, selectedEvent.id),
+        };
+      })
+    : [];
 
   if (loading) {
     return (
@@ -203,8 +209,23 @@ export default function EventListPage() {
     );
   }
 
+  if (loadError) {
+    return (
+      <ErrorState
+        title="Could not load events"
+        message={loadError}
+        action={(
+          <button type="button" onClick={() => fetchEvents({ showSpinner: true })} className="admin-primary-action">
+            Retry
+          </button>
+        )}
+      />
+    );
+  }
+
   return (
-    <div className="animate-fade-in relative min-h-screen pb-36">
+    <div className="animate-fade-in relative min-h-screen pb-[calc(9rem+env(safe-area-inset-bottom))]">
+      {dialog}
       <div className="mb-8 flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
         <div>
           <p className="admin-eyebrow mb-3">Event ledger</p>
@@ -231,16 +252,24 @@ export default function EventListPage() {
           {events.map((event, index) => (
             <div
               key={event.id}
-              onClick={() => setSelectedEventId(event.id)}
-              className={`admin-card admin-card-hover group animate-slide-up relative cursor-pointer p-5 ${openMenuId === event.id ? 'z-[100]' : ''} ${selectedEventId === event.id ? 'border-[#f2e7d8]/35 bg-[#191511] shadow-[#E23744]/10' : ''}`}
+              className={`admin-card admin-card-hover group animate-slide-up relative p-5 ${openMenuId === event.id ? 'z-[100]' : ''} ${selectedEventId === event.id ? 'border-[#f2e7d8]/35 bg-[#191511] shadow-[#E23744]/10' : ''}`}
               style={{ animationDelay: `${index * 50}ms` }}
             >
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+                <button
+                  type="button"
+                  onClick={() => setSelectedEventId(event.id)}
+                  aria-label={`Select ${event.title} for quick actions`}
+                  aria-pressed={selectedEventId === event.id}
+                  className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full border transition-all ${selectedEventId === event.id ? 'border-[#E23744] bg-[#E23744]/15' : 'border-white/10 bg-white/[0.04] hover:border-white/25'}`}
+                >
+                  <span className={`h-2.5 w-2.5 rounded-full ${selectedEventId === event.id ? 'bg-[#E23744]' : 'bg-[#8f867d]'}`} />
+                </button>
                 <div className="flex-1">
                   <div className="flex items-center gap-3 mb-2">
-                    <h3 className="text-xl font-black text-[#f7efe3] transition-colors group-hover:text-white" onClick={(e) => { e.stopPropagation(); navigate(`/admin/events/${event.id}/edit`); }}>
+                    <Link to={`/admin/events/${event.id}/edit`} className="text-xl font-black text-[#f7efe3] transition-colors group-hover:text-white hover:underline hover:underline-offset-4">
                       {event.title}
-                    </h3>
+                    </Link>
                     <span className={`admin-chip ${event.published ? 'bg-green-500/10 text-green-400 border-green-500/20' : 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20'}`}>
                       {event.published ? 'PUBLISHED' : 'DRAFT'}
                     </span>
@@ -273,12 +302,26 @@ export default function EventListPage() {
 
                   {/* Action Buttons */}
                   <div className="ml-auto flex shrink-0 gap-2 pl-0 md:pl-2">
-                    <Link to={`/admin/events/${event.id}/registrations`} className="admin-icon-button" title="View Registrations" onClick={(e) => e.stopPropagation()}>
-                      <Users size={18} />
-                    </Link>
-                    <Link to={`/admin/events/${event.id}/edit`} className="admin-icon-button" title="Edit" onClick={(e) => e.stopPropagation()}>
-                      <Edit size={18} />
-                    </Link>
+                    {EVENT_ACTIONS.filter(action => action.quick).map((action) => {
+                      const Icon = resolveActionIcon(action, event);
+                      const label = resolveActionText(action, event);
+
+                      return (
+                        <button
+                          key={action.id}
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleAction(action.id, event.id);
+                          }}
+                          className="admin-icon-button"
+                          title={label}
+                          aria-label={`${label} for ${event.title}`}
+                        >
+                          <Icon size={18} />
+                        </button>
+                      );
+                    })}
 
                     {/* Dropdown Menu */}
                     <div className="relative" ref={openMenuId === event.id ? menuRef : null}>
@@ -286,45 +329,49 @@ export default function EventListPage() {
                         onClick={(e) => toggleMenu(e, event.id)}
                         className="admin-icon-button"
                         title="More Options"
+                        aria-label={`More actions for ${event.title}`}
+                        aria-expanded={openMenuId === event.id}
+                        aria-haspopup="menu"
+                        aria-controls={`event-actions-${event.id}`}
+                        data-event-menu-trigger={event.id}
                       >
                         <MoreVertical size={18} />
                       </button>
 
                       {openMenuId === event.id && (
-                        <div className="absolute right-0 top-full mt-2 z-[9999] bg-[#1a1a1a] border border-white/10 rounded-xl shadow-2xl py-2 w-52 text-sm backdrop-blur-xl animate-fade-in" onClick={(e) => e.stopPropagation()}>
-                          <button onClick={() => handleAction('view', event.id)} className="w-full text-left px-4 py-2.5 hover:bg-white/10 text-white flex items-center gap-3">
-                            <Eye size={14} /> View Public Page
-                          </button>
-                          <button onClick={() => handleAction('edit', event.id)} className="w-full text-left px-4 py-2.5 hover:bg-white/10 text-white flex items-center gap-3">
-                            <Edit size={14} /> Edit Event
-                          </button>
-                          <button onClick={() => handleAction('duplicate', event.id)} className="w-full text-left px-4 py-2.5 hover:bg-white/10 text-white flex items-center gap-3">
-                            <Copy size={14} /> Duplicate Event
-                          </button>
-                          <div className="border-t border-white/10 my-1"></div>
-                          <button onClick={() => handleAction('registrations', event.id)} className="w-full text-left px-4 py-2.5 hover:bg-white/10 text-white flex items-center gap-3">
-                            <Users size={14} /> Registrations
-                          </button>
-                          <button onClick={() => handleAction('control', event.id)} className="w-full text-left px-4 py-2.5 hover:bg-white/10 text-[#E23744] flex items-center gap-3 font-medium">
-                            <Settings size={14} /> Control Center
-                          </button>
-                          <button onClick={() => handleAction('analytics', event.id)} className="w-full text-left px-4 py-2.5 hover:bg-white/10 text-white flex items-center gap-3">
-                            <BarChart3 size={14} /> Analytics
-                          </button>
-                          <button onClick={() => handleAction('discounts', event.id)} className="w-full text-left px-4 py-2.5 hover:bg-white/10 text-white flex items-center gap-3">
-                            <Tag size={14} /> Discounts
-                          </button>
-                          <button onClick={() => handleAction('form', event.id)} className="w-full text-left px-4 py-2.5 hover:bg-white/10 text-white flex items-center gap-3">
-                            <FileText size={14} /> Form Builder
-                          </button>
-                          <div className="border-t border-white/10 my-1"></div>
-                          <button onClick={() => handleAction('toggle', event.id)} className="w-full text-left px-4 py-2.5 hover:bg-white/10 text-white flex items-center gap-3">
-                            {event.published ? <EyeOff size={14} /> : <Eye size={14} />}
-                            {event.published ? 'Unpublish' : 'Publish'}
-                          </button>
-                          <button onClick={() => handleAction('delete', event.id)} className="w-full text-left px-4 py-2.5 hover:bg-red-500/20 text-red-500 flex items-center gap-3">
-                            <Trash2 size={14} /> Delete Event
-                          </button>
+                        <div
+                          id={`event-actions-${event.id}`}
+                          role="menu"
+                          aria-label={`Actions for ${event.title}`}
+                          className="absolute right-0 top-full mt-2 z-[60] bg-[#1a1a1a] border border-white/10 rounded-xl shadow-2xl py-2 w-52 text-sm backdrop-blur-xl animate-fade-in"
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Escape') {
+                              setOpenMenuId(null);
+                              document.querySelector(`[data-event-menu-trigger="${event.id}"]`)?.focus();
+                            }
+                          }}
+                        >
+                          {EVENT_ACTIONS.map((action) => {
+                            const Icon = resolveActionIcon(action, event);
+                            const label = resolveActionText(action, event);
+                            const buttonClass = action.destructive
+                              ? 'w-full text-left px-4 py-2.5 hover:bg-red-500/20 text-red-500 flex items-center gap-3'
+                              : `w-full text-left px-4 py-2.5 hover:bg-white/10 flex items-center gap-3 ${action.highlight ? 'text-[#E23744] font-medium' : 'text-white'}`;
+
+                            return (
+                              <div key={action.id} role="none">
+                                {action.dividerBefore && <div className="border-t border-white/10 my-1"></div>}
+                                <button
+                                  role="menuitem"
+                                  onClick={() => handleAction(action.id, event.id)}
+                                  className={buttonClass}
+                                >
+                                  <Icon size={14} /> {label}
+                                </button>
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                     </div>
@@ -337,7 +384,7 @@ export default function EventListPage() {
       )}
 
       {selectedEvent && (
-        <div className="fixed bottom-8 left-1/2 z-50 w-[min(760px,calc(100vw-2rem))] -translate-x-1/2 lg:left-[calc(50%+9rem)]">
+        <div className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] left-1/2 z-50 w-[min(760px,calc(100vw-2rem))] -translate-x-1/2 lg:bottom-[calc(2rem+env(safe-area-inset-bottom))] lg:left-[calc(50%+9rem)]">
           <Dock
             items={dockItems}
             className="mx-auto"

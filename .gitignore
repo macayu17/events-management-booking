@@ -1,7 +1,14 @@
 # Local runtime artifacts
 artifacts/
+verification/
 *.pdf
 goal.md
 generate_interview_prep_pdf.py
 backend/tmp-local-*.pid
 frontend/tmp-local-*.pid
+*.dump
+*.backup
+*.sql
+!backend/prisma/migrations/
+!backend/prisma/migrations/**/
+!backend/prisma/migrations/**/migration.sql

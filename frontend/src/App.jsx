@@ -10,6 +10,8 @@ const EventDetailsPage = lazy(() => import('./pages/public/EventDetailsPage'));
 const RegistrationPage = lazy(() => import('./pages/public/RegistrationPage'));
 const SuccessPage = lazy(() => import('./pages/public/SuccessPage'));
 const PhonePeCallbackPage = lazy(() => import('./pages/public/PhonePeCallbackPage'));
+const InfoPage = lazy(() => import('./pages/public/InfoPage'));
+const NotFoundPage = lazy(() => import('./pages/public/NotFoundPage'));
 
 // Scanner Page
 const ScannerPage = lazy(() => import('./pages/scanner/ScannerPage'));
@@ -36,16 +38,10 @@ const TeamCheckinPage = lazy(() => import('./pages/admin/TeamCheckinPage'));
 import PublicLayout from './layouts/PublicLayout';
 import AdminLayout from './layouts/AdminLayout';
 import ProtectedRoute from './components/ProtectedRoute';
+import { LoadingBlock } from './components/StateBlock';
 
 function PageLoader() {
-  return (
-    <div className="min-h-[60vh] flex items-center justify-center">
-      <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-5 py-4 text-sm font-medium text-gray-300 shadow-2xl shadow-black/20">
-        <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#E23744] border-t-transparent" />
-        Loading Occasio
-      </div>
-    </div>
-  );
+  return <LoadingBlock title="Loading Occasio" message="Preparing the page." />;
 }
 
 function App() {
@@ -73,6 +69,10 @@ function App() {
               <Route path="/events/:id/register" element={<RegistrationPage />} />
               <Route path="/success" element={<SuccessPage />} />
               <Route path="/payment/phonepe/callback" element={<PhonePeCallbackPage />} />
+              <Route path="/privacy" element={<InfoPage />} />
+              <Route path="/terms" element={<InfoPage />} />
+              <Route path="/contact" element={<InfoPage />} />
+              <Route path="*" element={<NotFoundPage />} />
             </Route>
 
             {/* Auth Routes */}
@@ -100,6 +100,7 @@ function App() {
 
               {/* Scanner - limited to admins/organizers */}
               <Route path="/scanner" element={<ScannerPage />} />
+              <Route path="/admin/*" element={<NotFoundPage />} />
             </Route>
           </Routes>
         </Suspense>

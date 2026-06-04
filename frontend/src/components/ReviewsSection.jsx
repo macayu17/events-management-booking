@@ -88,15 +88,17 @@ export default function ReviewsSection({ eventId }) {
 
             {showForm && (
                 <form onSubmit={handleSubmit} className="bg-[#18181b] p-6 rounded-xl border border-white/10 space-y-4 animate-scale-up">
-                    <div>
-                        <label className="block text-sm font-medium text-gray-400 mb-2">Rating</label>
-                        <div className="flex gap-2">
+                    <fieldset>
+                        <legend className="block text-sm font-medium text-gray-400 mb-2">Rating</legend>
+                        <div className="flex gap-2" role="group" aria-label={`Selected rating: ${rating} out of 5`}>
                             {[1, 2, 3, 4, 5].map((star) => (
                                 <button
                                     key={star}
                                     type="button"
                                     onClick={() => setRating(star)}
-                                    className="focus:outline-none transition-transform hover:scale-110"
+                                    aria-label={`Rate ${star} out of 5`}
+                                    aria-pressed={rating === star}
+                                    className="rounded-lg p-1 transition-transform hover:scale-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#E23744]"
                                 >
                                     <Star
                                         size={24}
@@ -105,11 +107,12 @@ export default function ReviewsSection({ eventId }) {
                                 </button>
                             ))}
                         </div>
-                    </div>
+                    </fieldset>
 
                     <div>
-                        <label className="block text-sm font-medium text-gray-400 mb-2">Comment</label>
+                        <label htmlFor={`review-comment-${eventId}`} className="block text-sm font-medium text-gray-400 mb-2">Comment</label>
                         <textarea
+                            id={`review-comment-${eventId}`}
                             value={comment}
                             onChange={(e) => setComment(e.target.value)}
                             className="input"

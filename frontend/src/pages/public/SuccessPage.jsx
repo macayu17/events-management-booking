@@ -1,105 +1,132 @@
 import { Link, useLocation } from 'react-router-dom';
 import { CheckCircle, Mail, Calendar, Download, ArrowRight } from 'lucide-react';
 import ShareButtons from '../../components/ShareButtons';
-
-// Get API URL with fallback
-const API_URL = import.meta.env.VITE_API_URL || '/api';
+import { buildApiUrl } from '../../utils/api';
 
 export default function SuccessPage() {
   const { state } = useLocation();
+  const eventId = state?.eventId ? encodeURIComponent(state.eventId) : null;
+  const orderId = state?.orderId ? encodeURIComponent(state.orderId) : null;
+  const hasSuccessContext = Boolean(state?.eventId || state?.orderId || state?.downloadToken);
+  const ticketDownloadUrl = state?.orderId && state?.downloadToken
+    ? `${buildApiUrl(`/tickets/order/${orderId}/download`)}?token=${encodeURIComponent(state.downloadToken)}`
+    : null;
+
+  if (!hasSuccessContext) {
+    return (
+      <div className="relative z-10 flex min-h-[62vh] items-center justify-center py-8 text-[#f7efe3]">
+        <section className="w-full max-w-xl rounded-[1.25rem] border border-white/10 bg-[#12100e] p-6 shadow-[0_24px_90px_rgba(0,0,0,0.28)] sm:p-8">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-[#E23744]/20 bg-[#E23744]/10 text-[#ff9aa2]">
+            <CheckCircle size={32} />
+          </div>
+          <p className="mt-6 text-xs font-black uppercase tracking-[0.2em] text-[#716960]">No ticket session</p>
+          <h1 className="mt-2 text-3xl font-black leading-tight tracking-normal text-[#f7efe3]">
+            This confirmation link has no ticket details.
+          </h1>
+          <p className="mt-3 text-sm leading-7 text-[#a99f95]">
+            Open this page from a completed registration so ticket actions can be shown.
+          </p>
+          <Link
+            to="/"
+            className="mt-7 inline-flex items-center justify-center gap-2 rounded-xl bg-[#E23744] px-5 py-3 text-sm font-black text-white transition-colors hover:bg-[#d12c39] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744]"
+          >
+            Explore Events
+            <ArrowRight size={18} />
+          </Link>
+        </section>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen z-10 font-['Outfit'] flex items-center justify-center p-4">
-      {/* Container - removed solid bg, added fade-in */}
-      <div className="max-w-xl w-full animate-scale-in">
-
-        <div className="glass-card bg-[#18181b]/40 backdrop-blur-2xl border border-white/10 rounded-3xl p-8 md:p-12 text-center shadow-2xl relative overflow-hidden group">
-          {/* Subtle noise texture overlay if desired, or just keep it clean glass */}
-          <div className="absolute inset-0 bg-white/5 opacity-50 pointer-events-none" style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg viewBox=%220 0 200 200%22 xmlns=%22http://www.w3.org/2000/svg%22%3E%3Cfilter id=%22noiseFilter%22%3E%3CfeTurbulence type=%22fractalNoise%22 baseFrequency=%220.65%22 numOctaves=%223%22 stitchTiles=%22stitch%22/%3E%3C/filter%3E%3Crect width=%22100%25%22 height=%22100%25%22 filter=%22url(%23noiseFilter)%22 opacity=%220.05%22/%3E%3C/svg%3E")' }}></div>
-
-          {/* Success Icon with Glow */}
-          <div className="relative inline-block mb-8">
-            <div className="absolute inset-0 bg-emerald-500/30 blur-2xl rounded-full"></div>
-            <div className="relative bg-emerald-500/10 p-4 rounded-full border border-emerald-500/20">
-              <CheckCircle size={48} className="text-emerald-400" />
-            </div>
+    <div className="relative z-10 flex min-h-[62vh] items-center justify-center py-8 text-[#f7efe3]">
+      <section className="w-full max-w-2xl rounded-[1.25rem] border border-white/10 bg-[#12100e] p-5 shadow-[0_24px_90px_rgba(0,0,0,0.28)] sm:p-7 lg:p-8">
+        <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
+          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-emerald-400/20 bg-emerald-400/10 text-emerald-300">
+            <CheckCircle size={34} />
           </div>
 
-          <h1 className="text-4xl font-bold text-white mb-2 tracking-tight">
-            Registration Successful!
-          </h1>
-          <p className="text-gray-400 mb-8 max-w-sm mx-auto">
-            You are ready to go! We've sent the details to your email.
-          </p>
-
-          <div className="bg-white/5 border border-white/10 rounded-2xl p-6 mb-8 text-left relative z-10 transition-colors hover:bg-white/10">
-            <div className="flex items-start gap-4">
-              <div className="p-2.5 bg-blue-500/10 rounded-xl text-blue-400 border border-blue-500/20">
-                <Mail size={24} />
-              </div>
-              <div>
-                <h3 className="text-white font-semibold text-lg mb-1">Check your email</h3>
-                <p className="text-gray-400 text-sm leading-relaxed">
-                  We've sent your event ticket to your registered email address.
-                  Please check your inbox (and spam folder) for the ticket with QR code.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="space-y-4 relative z-10">
-            {/* Action Buttons */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {state?.eventId && (
-                <a
-                  href={`/api/events/${state.eventId}/calendar`}
-                  className="flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl bg-white/5 hover:bg-white/10 text-white font-medium border border-white/10 transition-all hover:scale-[1.02]"
-                >
-                  <Calendar size={18} />
-                  <span>Add to Calendar</span>
-                </a>
-              )}
-
-              {state?.orderId && (
-                <a
-                  href={`${API_URL}/tickets/order/${state.orderId}/download`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl bg-white/5 hover:bg-white/10 text-white font-medium border border-white/10 transition-all hover:scale-[1.02]"
-                >
-                  <Download size={18} />
-                  <span>Download Ticket</span>
-                </a>
-              )}
-            </div>
-
-            <Link to="/" className="flex items-center justify-center gap-2 w-full py-4 rounded-xl bg-[#E23744] hover:bg-[#d12c39] text-white font-bold text-lg shadow-lg shadow-[#E23744]/25 transition-all hover:scale-[1.02] active:scale-[0.98]">
-              Browse More Events
-              <ArrowRight size={20} />
-            </Link>
-          </div>
-
-          {/* Share Section */}
-          <div className="mt-8 pt-8 border-t border-white/10 relative z-10">
-            <p className="text-sm text-gray-500 mb-4 font-medium uppercase tracking-widest">
-              Share this event with friends
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-black uppercase tracking-[0.2em] text-[#716960]">Registration complete</p>
+            <h1 className="mt-2 break-words text-3xl font-black leading-tight tracking-normal text-[#f7efe3] sm:text-4xl">
+              Your ticket is ready.
+            </h1>
+            <p className="mt-3 max-w-xl text-sm leading-7 text-[#a99f95] sm:text-base">
+              We sent the ticket details to your email. Keep the QR ticket handy for check-in.
             </p>
-            <div className="flex justify-center opacity-80 hover:opacity-100 transition-opacity">
-              <ShareButtons
-                title="Just booked my ticket! Check out this event"
-                url={state?.eventId ? `${window.location.origin}/events/${state.eventId}` : window.location.origin}
-              />
-            </div>
           </div>
-
         </div>
 
-        <p className="text-center text-gray-500 text-xs mt-8">
-          Need help? Contact us at <a href="mailto:support@occasio.com" className="text-gray-400 hover:text-white underline decoration-gray-600 underline-offset-4">support@occasio.com</a>
-        </p>
+        <div className="mt-7 border-t border-white/10 pt-6">
+          <div className="flex min-w-0 items-start gap-4">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#E23744]/15 bg-[#E23744]/10 text-[#ff9aa2]">
+              <Mail size={22} />
+            </div>
+            <div className="min-w-0">
+              <h2 className="font-black text-[#f7efe3]">Check your email</h2>
+              <p className="mt-1 text-sm leading-6 text-[#a99f95]">
+                Look for the ticket email with the QR code. If it is not in your inbox, check spam or promotions.
+              </p>
+            </div>
+          </div>
+        </div>
 
-      </div>
+        <div className="mt-7 space-y-3 border-t border-white/10 pt-6">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {eventId && (
+              <a
+                href={buildApiUrl(`/events/${eventId}/calendar`)}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-5 py-3.5 text-sm font-bold text-[#f7efe3] transition-colors hover:bg-white/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744]"
+              >
+                <Calendar size={18} />
+                <span>Add to Calendar</span>
+              </a>
+            )}
+
+            {ticketDownloadUrl && (
+              <a
+                href={ticketDownloadUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-5 py-3.5 text-sm font-bold text-[#f7efe3] transition-colors hover:bg-white/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744]"
+              >
+                <Download size={18} />
+                <span>Download Ticket</span>
+              </a>
+            )}
+          </div>
+
+          <Link
+            to="/"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#E23744] px-5 py-4 text-base font-black text-white transition-colors hover:bg-[#d12c39] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744] focus-visible:ring-offset-2 focus-visible:ring-offset-[#12100e]"
+          >
+            Browse More Events
+            <ArrowRight size={20} />
+          </Link>
+        </div>
+
+        {state?.eventId && (
+          <div className="mt-7 border-t border-white/10 pt-6">
+            <p className="mb-4 text-xs font-black uppercase tracking-[0.2em] text-[#716960]">
+              Share this event
+            </p>
+            <ShareButtons
+              title="Just booked my ticket. Check out this event"
+              url={`${window.location.origin}/events/${state.eventId}`}
+            />
+          </div>
+        )}
+
+        <p className="mt-7 border-t border-white/10 pt-5 text-sm text-[#8f867d]">
+          Need help? Contact{' '}
+          <a
+            href="mailto:support@occasio.com"
+            className="font-bold text-[#d9d0c6] underline decoration-white/20 underline-offset-4 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744]"
+          >
+            support@occasio.com
+          </a>
+        </p>
+      </section>
     </div>
   );
 }
-

@@ -8,11 +8,99 @@ import {
 import api from '../../utils/api';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
+import { ErrorState, LoadingBlock } from '../../components/StateBlock';
+
+const toFiniteNumber = (value, fallback = 0) => {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+};
+
+const toNullableNumber = (value) => {
+  if (value === null || value === undefined) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+};
+
+const toArray = (value) => Array.isArray(value) ? value : [];
+
+const normalizeTimePoint = (point = {}, index = 0) => ({
+  ...point,
+  date: point.date || point.time || new Date(0).toISOString(),
+  time: point.time || point.date || new Date(0).toISOString(),
+  count: toFiniteNumber(point.count),
+  amount: toFiniteNumber(point.amount),
+  cumulative: toFiniteNumber(point.cumulative),
+  key: point.date || point.time || `point-${index}`
+});
+
+const normalizeAnalytics = (payload = {}) => {
+  const providerBreakdown = payload.providerBreakdown && typeof payload.providerBreakdown === 'object'
+    ? Object.fromEntries(
+        Object.entries(payload.providerBreakdown).map(([provider, value = {}]) => [
+          provider,
+          {
+            ...value,
+            count: toFiniteNumber(value.count),
+            revenue: toFiniteNumber(value.revenue)
+          }
+        ])
+      )
+    : {};
+
+  return {
+    totalRegistrations: toFiniteNumber(payload.totalRegistrations),
+    registrationGrowth: toFiniteNumber(payload.registrationGrowth),
+    totalRevenue: toFiniteNumber(payload.totalRevenue),
+    averageOrderValue: toFiniteNumber(payload.averageOrderValue),
+    conversionRate: toFiniteNumber(payload.conversionRate),
+    paidRegistrations: toFiniteNumber(payload.paidRegistrations),
+    pendingRegistrations: toFiniteNumber(payload.pendingRegistrations),
+    failedRegistrations: toFiniteNumber(payload.failedRegistrations),
+    cancelledRegistrations: toFiniteNumber(payload.cancelledRegistrations),
+    checkedInCount: toFiniteNumber(payload.checkedInCount),
+    notCheckedInCount: toFiniteNumber(payload.notCheckedInCount),
+    checkInRate: toFiniteNumber(payload.checkInRate),
+    totalTickets: toFiniteNumber(payload.totalTickets),
+    totalDiscountUses: toFiniteNumber(payload.totalDiscountUses),
+    discountSavings: toFiniteNumber(payload.discountSavings),
+    eventCapacity: toFiniteNumber(payload.eventCapacity),
+    capacityUsed: toNullableNumber(payload.capacityUsed),
+    peakHour: payload.peakHour ? {
+      hour: toFiniteNumber(payload.peakHour.hour),
+      count: toFiniteNumber(payload.peakHour.count)
+    } : null,
+    dailyRegistrations: toArray(payload.dailyRegistrations).map(normalizeTimePoint),
+    dailyRevenue: toArray(payload.dailyRevenue).map(normalizeTimePoint),
+    hourlyDistribution: toArray(payload.hourlyDistribution).map((hour, index) => ({
+      hour: toFiniteNumber(hour?.hour, index),
+      count: toFiniteNumber(hour?.count)
+    })),
+    tierBreakdown: toArray(payload.tierBreakdown).map((tier = {}, index) => ({
+      id: tier.id || `tier-${index}`,
+      name: tier.name || 'Unnamed tier',
+      soldCount: toFiniteNumber(tier.soldCount),
+      capacity: toNullableNumber(tier.capacity),
+      revenue: toFiniteNumber(tier.revenue),
+      fillRate: toFiniteNumber(tier.fillRate)
+    })),
+    discountUsage: toArray(payload.discountUsage).map((discount = {}, index) => ({
+      code: discount.code || `DISCOUNT-${index + 1}`,
+      type: discount.type || 'FIXED_AMOUNT',
+      amount: toFiniteNumber(discount.amount),
+      usedCount: toFiniteNumber(discount.usedCount),
+      maxUses: toNullableNumber(discount.maxUses)
+    })),
+    checkinTimeline: toArray(payload.checkinTimeline).map(normalizeTimePoint),
+    providerBreakdown,
+    recentRegistrations: toArray(payload.recentRegistrations)
+  };
+};
 
 export default function AnalyticsPage() {
   const { id } = useParams();
   const [analytics, setAnalytics] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [timeRange, setTimeRange] = useState('30d'); // 7d, 30d, all
 
   useEffect(() => {
@@ -20,22 +108,38 @@ export default function AnalyticsPage() {
   }, [id]);
 
   const fetchAnalytics = async () => {
+    setLoading(true);
+    setLoadError('');
+
     try {
       const response = await api.get(`/admin/events/${id}/analytics`);
-      setAnalytics(response.data);
+      setAnalytics(normalizeAnalytics(response.data));
     } catch (error) {
       console.error('Failed to fetch analytics:', error);
-      toast.error('Failed to load analytics');
+      const message = error.response?.data?.error || 'Failed to load analytics';
+      setAnalytics(null);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
   };
 
   if (loading) {
+    return <LoadingBlock title="Loading analytics" message="Fetching registrations, revenue, and check-in trends." />;
+  }
+
+  if (loadError) {
     return (
-      <div className="flex justify-center py-12">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-[#E23744] border-r-2 border-[#E23744]/30"></div>
-      </div>
+      <ErrorState
+        title="Could not load analytics"
+        message={loadError}
+        action={(
+          <button type="button" onClick={fetchAnalytics} className="admin-primary-action">
+            Retry
+          </button>
+        )}
+      />
     );
   }
 
@@ -52,8 +156,10 @@ export default function AnalyticsPage() {
           {[['7d', '7 Days'], ['30d', '30 Days'], ['all', 'All']].map(([val, label]) => (
             <button
               key={val}
+              type="button"
               onClick={() => setTimeRange(val)}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+              aria-pressed={timeRange === val}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744] focus-visible:ring-offset-2 focus-visible:ring-offset-[#17110d] ${
                 timeRange === val ? 'bg-[#E23744] text-white' : 'text-gray-400 hover:text-white'
               }`}
             >
@@ -67,7 +173,6 @@ export default function AnalyticsPage() {
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <StatCard
           icon={<Users size={20} />}
-          color="blue"
           title="Registrations"
           value={analytics.totalRegistrations}
           sub={analytics.registrationGrowth !== 0
@@ -77,35 +182,30 @@ export default function AnalyticsPage() {
         />
         <StatCard
           icon={<IndianRupee size={20} />}
-          color="green"
           title="Revenue"
           value={`₹${formatNum(analytics.totalRevenue)}`}
           sub={`Avg ₹${formatNum(analytics.averageOrderValue)}`}
         />
         <StatCard
           icon={<Percent size={20} />}
-          color="purple"
           title="Conversion"
           value={`${analytics.conversionRate.toFixed(1)}%`}
           sub={`${analytics.paidRegistrations} of ${analytics.totalRegistrations}`}
         />
         <StatCard
           icon={<UserCheck size={20} />}
-          color="cyan"
           title="Checked In"
           value={analytics.checkedInCount}
           sub={`${analytics.checkInRate.toFixed(1)}% of ${analytics.totalTickets} tickets`}
         />
         <StatCard
           icon={<Ticket size={20} />}
-          color="orange"
           title="Tickets Issued"
           value={analytics.totalTickets}
           sub={analytics.capacityUsed !== null ? `${analytics.capacityUsed}% capacity` : null}
         />
         <StatCard
           icon={<Tag size={20} />}
-          color="pink"
           title="Discounts Used"
           value={analytics.totalDiscountUses}
           sub={analytics.discountSavings > 0 ? `₹${formatNum(analytics.discountSavings)} saved` : null}
@@ -138,7 +238,14 @@ export default function AnalyticsPage() {
               const max = Math.max(...analytics.hourlyDistribution.map(x => x.count), 1);
               const intensity = h.count / max;
               return (
-                <div key={h.hour} className="flex flex-col items-center gap-1" title={`${formatHour(h.hour)}: ${h.count} registrations`}>
+                <div
+                  key={h.hour}
+                  className="flex flex-col items-center gap-1 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744] focus-visible:ring-offset-2 focus-visible:ring-offset-[#17110d]"
+                  tabIndex={0}
+                  role="img"
+                  aria-label={`${formatHour(h.hour)}: ${h.count} registrations`}
+                  title={`${formatHour(h.hour)}: ${h.count} registrations`}
+                >
                   <div
                     className="w-full aspect-square rounded-sm transition-colors"
                     style={{
@@ -216,7 +323,7 @@ export default function AnalyticsPage() {
               {analytics.discountUsage.map((d, i) => (
                 <div key={i} className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
                   <div className="flex items-center gap-3">
-                    <code className="text-sm font-mono text-purple-300 bg-purple-500/10 px-2 py-0.5 rounded">{d.code}</code>
+                    <code className="text-sm font-mono text-[#f2e7d8] bg-[#E23744]/10 border border-[#E23744]/20 px-2 py-0.5 rounded">{d.code}</code>
                     <span className="text-xs text-gray-500">
                       {d.type === 'PERCENTAGE' ? `${d.amount}% off` : `₹${(d.amount / 100).toFixed(0)} off`}
                     </span>
@@ -229,7 +336,7 @@ export default function AnalyticsPage() {
               ))}
               {analytics.discountSavings > 0 && (
                 <div className="text-xs text-gray-500 text-right mt-1">
-                  Total savings: <span className="text-purple-300">₹{formatNum(analytics.discountSavings)}</span>
+                  Total savings: <span className="text-[#f2e7d8]">₹{formatNum(analytics.discountSavings)}</span>
                 </div>
               )}
             </div>
@@ -252,8 +359,8 @@ export default function AnalyticsPage() {
             <div className="text-3xl font-bold text-blue-400 mb-1">{analytics.checkInRate.toFixed(1)}%</div>
             <div className="text-xs text-gray-400">Check-in Rate</div>
           </div>
-          <div className="text-center p-4 bg-purple-500/10 border border-purple-500/20 rounded-xl">
-            <div className="text-3xl font-bold text-purple-400 mb-1">{analytics.totalTickets}</div>
+          <div className="text-center p-4 bg-[#E23744]/10 border border-[#E23744]/20 rounded-xl">
+            <div className="text-3xl font-bold text-[#f2e7d8] mb-1">{analytics.totalTickets}</div>
             <div className="text-xs text-gray-400">Total Tickets</div>
           </div>
         </div>
@@ -263,12 +370,15 @@ export default function AnalyticsPage() {
           <div>
             <h4 className="text-sm font-medium text-gray-400 mb-3">Check-in Timeline</h4>
             <div className="flex items-end gap-[2px] h-24">
-              {analytics.checkinTimeline.map((pt, i) => {
+              {analytics.checkinTimeline.map((pt) => {
                 const max = Math.max(...analytics.checkinTimeline.map(p => p.count), 1);
                 return (
                   <div
-                    key={i}
-                    className="flex-1 bg-green-500/60 rounded-t-sm hover:bg-green-400 transition-colors"
+                    key={pt.key}
+                    className="flex-1 bg-green-500/60 rounded-t-sm hover:bg-green-400 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#17110d]"
+                    tabIndex={0}
+                    role="img"
+                    aria-label={`${format(new Date(pt.time), 'HH:mm')}: ${pt.count} check-ins, ${pt.cumulative} total`}
                     style={{ height: `${(pt.count / max) * 100}%` }}
                     title={`${format(new Date(pt.time), 'HH:mm')} — ${pt.count} check-ins (${pt.cumulative} total)`}
                   />
@@ -337,7 +447,7 @@ export default function AnalyticsPage() {
       {/* ─── Recent Registrations ─── */}
       <GlassCard title="Recent Registrations" icon={<Users size={18} />}>
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full min-w-[760px] text-sm">
             <thead>
               <tr className="text-gray-500 text-xs uppercase border-b border-white/5">
                 <th className="text-left py-2 pr-4">Name</th>
@@ -396,14 +506,14 @@ export default function AnalyticsPage() {
 
 function GlassCard({ title, icon, badge, children }) {
   return (
-    <div className="glass-card rounded-2xl p-6 bg-[#18181b]/60 border border-white/5">
+    <div className="admin-card p-5 sm:p-6 min-w-0">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold text-white flex items-center gap-2">
           {icon && <span className="text-gray-400">{icon}</span>}
           {title}
         </h2>
         {badge && (
-          <span className="text-xs bg-white/5 text-gray-400 px-2 py-1 rounded-full">{badge}</span>
+          <span className="admin-chip border-white/10 bg-white/[0.04] text-[#aaa096]">{badge}</span>
         )}
       </div>
       {children}
@@ -411,28 +521,20 @@ function GlassCard({ title, icon, badge, children }) {
   );
 }
 
-function StatCard({ icon, color, title, value, sub, trend }) {
-  const colors = {
-    blue: 'from-blue-500/20 to-blue-500/5 border-blue-500/20 text-blue-400',
-    green: 'from-green-500/20 to-green-500/5 border-green-500/20 text-green-400',
-    purple: 'from-purple-500/20 to-purple-500/5 border-purple-500/20 text-purple-400',
-    cyan: 'from-cyan-500/20 to-cyan-500/5 border-cyan-500/20 text-cyan-400',
-    orange: 'from-orange-500/20 to-orange-500/5 border-orange-500/20 text-orange-400',
-    pink: 'from-pink-500/20 to-pink-500/5 border-pink-500/20 text-pink-400',
-  };
+function StatCard({ icon, title, value, sub, trend }) {
   return (
-    <div className={`rounded-2xl p-4 bg-gradient-to-br border ${colors[color] || colors.blue}`}>
+    <div className="admin-card admin-card-hover p-4 min-w-0">
       <div className="flex items-center justify-between mb-2">
-        <span className="opacity-70">{icon}</span>
+        <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-[#E23744]/20 bg-[#E23744]/10 text-[#E23744]">{icon}</span>
         {trend && (
           trend === 'up'
             ? <ArrowUpRight size={14} className="text-green-400" />
             : <ArrowDownRight size={14} className="text-red-400" />
         )}
       </div>
-      <div className="text-2xl font-bold text-white mb-0.5">{value}</div>
-      <div className="text-xs text-gray-400">{title}</div>
-      {sub && <div className="text-[10px] text-gray-500 mt-1">{sub}</div>}
+      <div className="text-2xl font-bold text-white mb-0.5 truncate">{value}</div>
+      <div className="text-xs text-gray-400 truncate">{title}</div>
+      {sub && <div className="text-[10px] text-gray-500 mt-1 truncate">{sub}</div>}
     </div>
   );
 }
@@ -476,12 +578,15 @@ function TimelineChart({ data, labelKey, valueKey, color, prefix = '' }) {
   return (
     <div>
       <div className="flex items-end gap-[3px] h-32">
-        {chartData.map((d, i) => {
+        {chartData.map((d) => {
           const pct = (d[valueKey] / max) * 100;
           return (
             <div
-              key={i}
-              className="flex-1 rounded-t-sm hover:opacity-80 transition-all cursor-default"
+              key={d.key}
+              className="flex-1 rounded-t-sm hover:opacity-80 transition-all cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744] focus-visible:ring-offset-2 focus-visible:ring-offset-[#17110d]"
+              tabIndex={0}
+              role="img"
+              aria-label={`${format(new Date(d[labelKey]), 'MMM dd')}: ${prefix}${formatNum(d[valueKey])}`}
               style={{
                 height: `${Math.max(pct, 2)}%`,
                 backgroundColor: pct > 0 ? color : 'rgba(255,255,255,0.03)',
@@ -519,8 +624,8 @@ function formatHour(hour) {
 }
 
 function formatNum(n) {
-  if (n === null || n === undefined) return '0';
-  if (n >= 100000) return `${(n / 100000).toFixed(1)}L`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
-  return Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  const value = toFiniteNumber(n);
+  if (value >= 100000) return `${(value / 100000).toFixed(1)}L`;
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}K`;
+  return value.toLocaleString('en-IN', { maximumFractionDigits: 2 });
 }

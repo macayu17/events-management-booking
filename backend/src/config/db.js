@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { Resolver } from 'node:dns/promises';
 
 const isNeonHost = (host) => host?.includes('.aws.neon.tech');
+const DNS_FALLBACK_TIMEOUT_MS = Number(process.env.NEON_DNS_FALLBACK_TIMEOUT_MS || 2500);
 
 const getNeonProjectIdFromHost = (host) => {
   if (!host) return null;
@@ -12,7 +13,12 @@ const getNeonProjectIdFromHost = (host) => {
 const resolveNeonHostWithPublicDns = async (host) => {
   const resolver = new Resolver();
   resolver.setServers(['1.1.1.1', '8.8.8.8']);
-  const addresses = await resolver.resolve4(host);
+  const addresses = await Promise.race([
+    resolver.resolve4(host),
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Neon DNS fallback timed out')), DNS_FALLBACK_TIMEOUT_MS);
+    }),
+  ]);
   return addresses?.[0] || null;
 };
 
@@ -37,7 +43,8 @@ const buildPrismaDbUrl = async () => {
           if (!parsed.port) parsed.port = '5432';
           console.log('ℹ️ Using Neon DNS fallback via public resolver');
         }
-      } catch {
+      } catch (error) {
+        console.warn(`⚠️ Neon DNS fallback skipped: ${error.message}`);
         // If public DNS resolution fails, keep original URL and let normal connection retry handle it.
       }
     }

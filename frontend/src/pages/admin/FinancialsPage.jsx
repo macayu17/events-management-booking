@@ -1,18 +1,41 @@
 import { useState, useEffect } from 'react';
-import { BarChart3, TrendingUp, TrendingDown, IndianRupee, Calendar, Ticket, Loader2, RefreshCw } from 'lucide-react';
+import { BarChart3, TrendingUp, TrendingDown, IndianRupee, Calendar, Ticket, RefreshCw } from 'lucide-react';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
+import { ErrorState, LoadingBlock } from '../../components/StateBlock';
+
+const defaultFinancials = {
+    totalRevenue: 0,
+    totalTickets: 0,
+    activeEvents: 0,
+    revenueGrowth: 0,
+    revenueChart: []
+};
+
+const toFiniteNumber = (value, fallback = 0) => {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : fallback;
+};
+
+const normalizeFinancials = (payload = {}) => ({
+    totalRevenue: toFiniteNumber(payload.totalRevenue),
+    totalTickets: toFiniteNumber(payload.totalTickets),
+    activeEvents: toFiniteNumber(payload.activeEvents),
+    revenueGrowth: toFiniteNumber(payload.revenueGrowth),
+    revenueChart: Array.isArray(payload.revenueChart)
+        ? payload.revenueChart.map((item, index) => ({
+            month: typeof item?.month === 'string' ? item.month : '',
+            revenue: toFiniteNumber(item?.revenue),
+            key: item?.month || `month-${index}`
+        }))
+        : []
+});
 
 export default function FinancialsPage() {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
-    const [data, setData] = useState({
-        totalRevenue: 0,
-        totalTickets: 0,
-        activeEvents: 0,
-        revenueGrowth: 0,
-        revenueChart: []
-    });
+    const [loadError, setLoadError] = useState('');
+    const [data, setData] = useState(defaultFinancials);
 
     useEffect(() => {
         fetchFinancials();
@@ -20,12 +43,20 @@ export default function FinancialsPage() {
 
     const fetchFinancials = async (isRefresh = false) => {
         if (isRefresh) setRefreshing(true);
+        if (!isRefresh) setLoading(true);
+        setLoadError('');
+
         try {
             const response = await api.get('/admin/financials');
-            setData(response.data);
+            setData(normalizeFinancials(response.data));
             if (isRefresh) toast.success('Financial data updated');
         } catch (error) {
-            toast.error('Failed to load financial data');
+            const message = error.response?.data?.error || 'Failed to load financial data';
+            if (!isRefresh) {
+                setLoadError(message);
+                setData(defaultFinancials);
+            }
+            toast.error(message);
             console.error(error);
         } finally {
             setLoading(false);
@@ -38,12 +69,14 @@ export default function FinancialsPage() {
             style: 'currency',
             currency: 'INR',
             maximumFractionDigits: 0
-        }).format(amount);
+        }).format(toFiniteNumber(amount));
     };
 
     const formatMonth = (monthStr) => {
+        if (typeof monthStr !== 'string' || !monthStr.includes('-')) return 'N/A';
         const [year, month] = monthStr.split('-');
-        const date = new Date(year, parseInt(month) - 1);
+        const date = new Date(Number(year), Number.parseInt(month, 10) - 1);
+        if (!Number.isFinite(date.getTime())) return 'N/A';
         return date.toLocaleDateString('en-US', { month: 'short' });
     };
 
@@ -51,25 +84,35 @@ export default function FinancialsPage() {
     const maxRevenue = Math.max(...data.revenueChart.map(d => d.revenue), 1);
 
     if (loading) {
+        return <LoadingBlock title="Loading financials" message="Fetching revenue and ticket totals." />;
+    }
+
+    if (loadError) {
         return (
-            <div className="flex items-center justify-center h-96">
-                <Loader2 className="animate-spin text-[#E23744]" size={48} />
-            </div>
+            <ErrorState
+                title="Could not load financials"
+                message={loadError}
+                action={(
+                    <button type="button" onClick={() => fetchFinancials()} className="admin-primary-action">
+                        Retry
+                    </button>
+                )}
+            />
         );
     }
 
     return (
-        <div className="space-y-8 font-['Inter'] relative">
+        <div className="space-y-8 relative">
             {/* Header */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div>
                     <h2 className="text-3xl font-bold text-white tracking-tight">Financial Analytics</h2>
-                    <p className="text-gray-400 mt-1">Track your revenue and sales performance</p>
+                    <p className="admin-muted mt-1">Track your revenue and sales performance</p>
                 </div>
                 <button
                     onClick={() => fetchFinancials(true)}
                     disabled={refreshing}
-                    className="flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 text-white rounded-xl border border-white/10 transition-all disabled:opacity-50"
+                    className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-[#f7efe3] transition-all hover:border-[#f2e7d8]/25 hover:bg-white/[0.07] disabled:opacity-50"
                 >
                     <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} />
                     {refreshing ? 'Updating...' : 'Refresh Data'}
@@ -78,11 +121,9 @@ export default function FinancialsPage() {
 
             {/* Stats Cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="glass-card p-6 rounded-3xl bg-[#18181b]/60 backdrop-blur-xl border border-white/10 relative overflow-hidden group">
-                    <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/10 rounded-full blur-[50px] -mr-10 -mt-10 transition-opacity group-hover:opacity-100" />
-
+                <div className="admin-card admin-card-hover p-5 sm:p-6 relative overflow-hidden min-w-0">
                     <div className="flex items-center justify-between mb-6 relative">
-                        <div className="p-3 rounded-2xl bg-emerald-500/10 text-emerald-500 ring-1 ring-emerald-500/20">
+                        <div className="p-3 rounded-xl bg-[#E23744]/10 text-[#E23744] ring-1 ring-[#E23744]/20">
                             <IndianRupee size={24} />
                         </div>
                         {data.revenueGrowth !== 0 && (
@@ -95,44 +136,42 @@ export default function FinancialsPage() {
                             </span>
                         )}
                     </div>
-                    <p className="text-gray-400 text-sm font-medium uppercase tracking-wider">Total Revenue</p>
-                    <p className="text-4xl font-bold text-white mt-2 tracking-tight">{formatCurrency(data.totalRevenue)}</p>
+                    <p className="admin-eyebrow">Total Revenue</p>
+                    <p className="text-4xl font-bold text-white mt-2 tracking-tight truncate">{formatCurrency(data.totalRevenue)}</p>
                 </div>
 
-                <div className="glass-card p-6 rounded-3xl bg-[#18181b]/60 backdrop-blur-xl border border-white/10 relative overflow-hidden group">
-                    <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/10 rounded-full blur-[50px] -mr-10 -mt-10 transition-opacity group-hover:opacity-100" />
+                <div className="admin-card admin-card-hover p-5 sm:p-6 relative overflow-hidden min-w-0">
                     <div className="flex items-center justify-between mb-6 relative">
-                        <div className="p-3 rounded-2xl bg-blue-500/10 text-blue-500 ring-1 ring-blue-500/20">
+                        <div className="p-3 rounded-xl bg-[#f2e7d8]/10 text-[#f2e7d8] ring-1 ring-white/10">
                             <Ticket size={24} />
                         </div>
                     </div>
-                    <p className="text-gray-400 text-sm font-medium uppercase tracking-wider">Tickets Sold</p>
+                    <p className="admin-eyebrow">Tickets Sold</p>
                     <p className="text-4xl font-bold text-white mt-2 tracking-tight">{data.totalTickets.toLocaleString()}</p>
                 </div>
 
-                <div className="glass-card p-6 rounded-3xl bg-[#18181b]/60 backdrop-blur-xl border border-white/10 relative overflow-hidden group">
-                    <div className="absolute top-0 right-0 w-32 h-32 bg-purple-500/10 rounded-full blur-[50px] -mr-10 -mt-10 transition-opacity group-hover:opacity-100" />
+                <div className="admin-card admin-card-hover p-5 sm:p-6 relative overflow-hidden min-w-0">
                     <div className="flex items-center justify-between mb-6 relative">
-                        <div className="p-3 rounded-2xl bg-purple-500/10 text-purple-500 ring-1 ring-purple-500/20">
+                        <div className="p-3 rounded-xl bg-[#f2e7d8]/10 text-[#f2e7d8] ring-1 ring-white/10">
                             <Calendar size={24} />
                         </div>
                     </div>
-                    <p className="text-gray-400 text-sm font-medium uppercase tracking-wider">Active Events</p>
+                    <p className="admin-eyebrow">Active Events</p>
                     <p className="text-4xl font-bold text-white mt-2 tracking-tight">{data.activeEvents}</p>
                 </div>
             </div>
 
             {/* Revenue Chart */}
-            <div className="glass-card p-8 rounded-3xl bg-[#18181b]/60 backdrop-blur-xl border border-white/10 shadow-xl">
+            <div className="admin-card p-5 sm:p-6 lg:p-8">
                 <div className="flex items-center gap-3 mb-8">
                     <div className="p-2 bg-[#E23744]/10 rounded-lg text-[#E23744]">
                         <BarChart3 size={24} />
                     </div>
                     <div>
                         <h3 className="text-xl font-bold text-white">Revenue Overview</h3>
-                        <p className="text-sm text-gray-400">Monthly revenue breakdown</p>
+                        <p className="text-sm admin-muted">Monthly revenue breakdown</p>
                     </div>
-                    <span className="text-xs font-medium text-gray-500 ml-auto bg-white/5 px-3 py-1 rounded-full border border-white/5">Last 6 months</span>
+                    <span className="admin-chip border-white/10 bg-white/[0.04] text-[#aaa096] ml-auto">Last 6 months</span>
                 </div>
 
                 {data.revenueChart.length > 0 ? (
@@ -150,11 +189,20 @@ export default function FinancialsPage() {
 
                             {data.revenueChart.map((item) => {
                                 const height = maxRevenue > 0 ? (item.revenue / maxRevenue) * 100 : 0;
+                                const monthLabel = formatMonth(item.month);
+                                const revenueLabel = formatCurrency(item.revenue);
+
                                 return (
-                                    <div key={item.month} className="flex-1 flex flex-col items-center gap-3 z-10 group">
+                                    <div
+                                        key={item.key}
+                                        className="flex-1 flex flex-col items-center gap-3 z-10 group rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744] focus-visible:ring-offset-2 focus-visible:ring-offset-[#18181b]"
+                                        tabIndex={0}
+                                        role="img"
+                                        aria-label={`${monthLabel} revenue ${revenueLabel}`}
+                                    >
                                         <div className="relative w-full flex justify-end flex-col h-full group-hover:-translate-y-1 transition-transform duration-300">
                                             <div
-                                                className="w-full bg-gradient-to-t from-[#E23744]/40 to-[#E23744] rounded-t-lg transition-all duration-700 relative overflow-hidden"
+                                                className="w-full rounded-t-md bg-[#E23744]/85 transition-all duration-700 relative overflow-hidden"
                                                 style={{
                                                     height: `${Math.max(height, 2)}%`,
                                                     minHeight: item.revenue > 0 ? '20px' : '4px'
@@ -164,15 +212,24 @@ export default function FinancialsPage() {
                                             </div>
 
                                             {/* Tooltip */}
-                                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-[#18181b] border border-white/10 text-white text-xs font-bold px-3 py-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-all shadow-xl whitespace-nowrap z-20 pointer-events-none transform translate-y-2 group-hover:translate-y-0">
-                                                {formatCurrency(item.revenue)}
+                                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-[#18181b] border border-white/10 text-white text-xs font-bold px-3 py-1.5 rounded-lg opacity-0 group-hover:opacity-100 group-focus:opacity-100 transition-all shadow-xl whitespace-nowrap z-20 pointer-events-none transform translate-y-2 group-hover:translate-y-0 group-focus:translate-y-0">
+                                                {revenueLabel}
                                                 <div className="absolute top-full left-1/2 -translate-x-1/2 border-8 border-transparent border-t-[#18181b]"></div>
                                             </div>
                                         </div>
-                                        <span className="text-xs font-medium text-gray-500 group-hover:text-white transition-colors uppercase">{formatMonth(item.month)}</span>
+                                        <span className="text-xs font-medium text-gray-500 group-hover:text-white transition-colors uppercase">{monthLabel}</span>
                                     </div>
                                 );
                             })}
+                        </div>
+
+                        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                            {data.revenueChart.map(item => (
+                                <div key={`${item.key}-summary`} className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.035] px-3 py-2 text-sm">
+                                    <span className="font-medium uppercase text-gray-400">{formatMonth(item.month)}</span>
+                                    <span className="font-bold text-white">{formatCurrency(item.revenue)}</span>
+                                </div>
+                            ))}
                         </div>
 
                         {/* Summary */}

@@ -112,7 +112,7 @@ export default function ScannerPage() {
     }
   }, []);
 
-  const verifyTicket = useCallback(async (qrData) => {
+  const verifyTicket = useCallback(async (qrData, { bypassDedupe = false } = {}) => {
     const normalizedQrData = normalizeQrPayload(qrData);
     const now = Date.now();
 
@@ -123,20 +123,22 @@ export default function ScannerPage() {
 
     if (verificationInFlightRef.current) return;
 
-    if (lastPayloadRef.current === normalizedQrData && now - lastScanAtRef.current < SCAN_DEDUPE_MS) {
+    if (!bypassDedupe && lastPayloadRef.current === normalizedQrData && now - lastScanAtRef.current < SCAN_DEDUPE_MS) {
       return;
     }
 
     verificationInFlightRef.current = true;
-    lastPayloadRef.current = normalizedQrData;
-    lastScanAtRef.current = now;
     setLoading(true);
     setCameraError('');
+    setVerificationResult(null);
 
     try {
       const response = await api.post('/tickets/verify', {
         qrPayload: normalizedQrData
       });
+
+      lastPayloadRef.current = normalizedQrData;
+      lastScanAtRef.current = Date.now();
 
       setVerificationResult({
         valid: true,
@@ -147,6 +149,14 @@ export default function ScannerPage() {
       toast.success('Valid ticket. Attendee checked in.');
     } catch (error) {
       const errorData = error.response?.data;
+
+      if (error.response) {
+        lastPayloadRef.current = normalizedQrData;
+        lastScanAtRef.current = Date.now();
+      } else {
+        lastPayloadRef.current = '';
+        lastScanAtRef.current = 0;
+      }
 
       setVerificationResult({
         valid: false,
@@ -236,7 +246,7 @@ export default function ScannerPage() {
   const submitManualEntry = async (event) => {
     event.preventDefault();
     await stopScanner();
-    await verifyTicket(manualValue);
+    await verifyTicket(manualValue, { bypassDedupe: true });
     setManualValue('');
     setManualOpen(false);
   };
@@ -321,7 +331,7 @@ export default function ScannerPage() {
             </div>
 
             {cameraError && (
-              <div className="mt-4 flex gap-3 rounded-2xl border border-amber-400/25 bg-amber-400/10 p-4 text-sm text-amber-100">
+              <div role="alert" className="mt-4 flex gap-3 rounded-2xl border border-amber-400/25 bg-amber-400/10 p-4 text-sm text-amber-100">
                 <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-300" />
                 <span>{cameraError}</span>
               </div>
@@ -342,7 +352,7 @@ export default function ScannerPage() {
                 <button
                   type="button"
                   onClick={stopScanner}
-                  className="rounded-full border border-white/10 bg-white/[0.05] px-5 py-3 text-sm font-bold text-[#f7efe3] transition-all hover:bg-white/[0.09]"
+                  className="rounded-full border border-white/10 bg-white/[0.05] px-5 py-3 text-sm font-bold text-[#f7efe3] transition-all hover:bg-white/[0.09] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744] focus-visible:ring-offset-2 focus-visible:ring-offset-[#17110d]"
                 >
                   Stop Scanning
                 </button>
@@ -351,7 +361,8 @@ export default function ScannerPage() {
               <button
                 type="button"
                 onClick={() => setManualOpen((open) => !open)}
-                className="rounded-full border border-white/10 bg-[#f2e7d8] px-5 py-3 text-sm font-black text-[#17110d] transition-all hover:-translate-y-0.5 hover:bg-white"
+                aria-expanded={manualOpen}
+                className="rounded-full border border-white/10 bg-[#f2e7d8] px-5 py-3 text-sm font-black text-[#17110d] transition-all hover:-translate-y-0.5 hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744] focus-visible:ring-offset-2 focus-visible:ring-offset-[#17110d]"
               >
                 <span className="inline-flex items-center justify-center gap-2">
                   <Keyboard size={18} />
@@ -376,7 +387,7 @@ export default function ScannerPage() {
                 <button
                   type="submit"
                   disabled={loading || !manualValue.trim()}
-                  className="mt-3 w-full rounded-full bg-[#E23744] px-5 py-3 text-sm font-black text-white transition hover:bg-[#f04552] disabled:cursor-not-allowed disabled:opacity-50"
+                  className="mt-3 w-full rounded-full bg-[#E23744] px-5 py-3 text-sm font-black text-white transition hover:bg-[#f04552] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744] focus-visible:ring-offset-2 focus-visible:ring-offset-[#17110d] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Verify Manual Entry
                 </button>
@@ -444,7 +455,7 @@ function ResultPanel({ result, loading, onScanNext }) {
   const Icon = isValid ? CheckCircle : XCircle;
 
   return (
-    <section className={`rounded-[1.65rem] border p-5 shadow-[0_24px_80px_rgba(0,0,0,0.22)] ${tone}`}>
+    <section className={`rounded-[1.65rem] border p-5 shadow-[0_24px_80px_rgba(0,0,0,0.22)] ${tone}`} role="status" aria-live="polite">
       <div className="flex items-start gap-4">
         <Icon size={42} className="shrink-0" />
         <div>
@@ -471,7 +482,7 @@ function ResultPanel({ result, loading, onScanNext }) {
         type="button"
         onClick={onScanNext}
         disabled={loading}
-        className="mt-5 flex w-full items-center justify-center gap-2 rounded-full bg-[#f2e7d8] px-5 py-3 text-sm font-black text-[#17110d] transition hover:-translate-y-0.5 hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
+        className="mt-5 flex w-full items-center justify-center gap-2 rounded-full bg-[#f2e7d8] px-5 py-3 text-sm font-black text-[#17110d] transition hover:-translate-y-0.5 hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744] focus-visible:ring-offset-2 focus-visible:ring-offset-[#17110d] disabled:cursor-not-allowed disabled:opacity-60"
       >
         <RotateCcw size={17} />
         Scan Next Ticket

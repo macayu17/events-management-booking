@@ -29,7 +29,7 @@
 
   /* Minimal Button System */
   .btn {
-    @apply px-5 py-2.5 rounded-full font-medium transition-all duration-200 active:scale-95 flex items-center justify-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744] focus-visible:ring-offset-2 focus-visible:ring-offset-[#09090b];
+    @apply px-5 py-2.5 rounded-full font-medium transition-[background-color,border-color,color,box-shadow,transform] duration-200 active:scale-95 flex items-center justify-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744] focus-visible:ring-offset-2 focus-visible:ring-offset-[#09090b];
   }
 
   .btn-primary {
@@ -59,7 +59,7 @@
 
   /* Form Elements */
   .input {
-    @apply w-full bg-[#18181b] border border-white/10 rounded-xl px-4 py-3 text-white placeholder-[#71717a] focus:outline-none focus:border-[#E23744]/70 focus:ring-1 focus:ring-[#E23744]/70 transition-all;
+    @apply w-full bg-[#18181b] border border-white/10 rounded-xl px-4 py-3 text-white placeholder-[#71717a] focus:outline-none focus:border-[#E23744]/70 focus:ring-1 focus:ring-[#E23744]/70 transition-[background-color,border-color,box-shadow,color];
   }
 
   /* Badges */
@@ -97,7 +97,7 @@
   }
 
   .admin-nav-link {
-    @apply flex items-center gap-3 rounded-full px-4 py-3 text-sm font-semibold tracking-wide transition-all;
+    @apply flex items-center gap-3 rounded-full px-4 py-3 text-sm font-semibold tracking-wide transition-[background-color,color,box-shadow,transform];
   }
 
   .admin-nav-link-active {
@@ -109,7 +109,7 @@
   }
 
   .admin-card {
-    @apply rounded-[1.65rem] border border-white/10 bg-[#151311]/80 shadow-[0_24px_80px_rgba(0,0,0,0.22)] backdrop-blur-xl transition-all;
+    @apply rounded-[1.65rem] border border-white/10 bg-[#151311]/80 shadow-[0_24px_80px_rgba(0,0,0,0.22)] backdrop-blur-xl transition-[background-color,border-color,box-shadow,transform];
   }
 
   .admin-card-hover {
@@ -129,11 +129,11 @@
   }
 
   .admin-primary-action {
-    @apply rounded-full border border-[#E23744]/60 bg-[#E23744] px-5 py-3 text-sm font-bold text-white shadow-xl shadow-[#E23744]/20 transition-all hover:-translate-y-0.5 hover:bg-[#f04552] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0b0a09];
+    @apply rounded-full border border-[#E23744]/60 bg-[#E23744] px-5 py-3 text-sm font-bold text-white shadow-xl shadow-[#E23744]/20 transition-[background-color,border-color,box-shadow,transform] hover:-translate-y-0.5 hover:bg-[#f04552] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0b0a09];
   }
 
   .admin-icon-button {
-    @apply inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-[#bdb4aa] transition-all hover:border-[#f2e7d8]/30 hover:bg-[#f2e7d8] hover:text-[#17110d] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0b0a09];
+    @apply inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-[#bdb4aa] transition-[background-color,border-color,color,box-shadow,transform] hover:border-[#f2e7d8]/30 hover:bg-[#f2e7d8] hover:text-[#17110d] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744] focus-visible:ring-offset-2 focus-visible:ring-offset-[#0b0a09];
   }
 
   .scanner-reader,
@@ -169,7 +169,7 @@
   }
 
   .auth-input {
-    @apply w-full rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3.5 text-white placeholder-[#756d66] outline-none transition-all focus:border-[#E23744]/70 focus:ring-2 focus:ring-[#E23744]/20;
+    @apply w-full rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3.5 text-white placeholder-[#756d66] outline-none transition-[background-color,border-color,box-shadow,color] focus:border-[#E23744]/70 focus:ring-2 focus:ring-[#E23744]/20;
   }
 }
 

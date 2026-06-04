@@ -1,25 +1,24 @@
 import express from 'express';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import certificateAdminRoutes from './admin.certificate.routes.js';
 import { body, validationResult } from 'express-validator';
 import prisma from '../config/db.js';
 import { authenticate, requireOrganizer, checkEventAccess } from '../middleware/auth.middleware.js';
-import { upload, uploadPdf } from '../middleware/upload.middleware.js';
+import { upload } from '../middleware/upload.middleware.js';
 import { uploadToS3 } from '../utils/s3.util.js';
-import { uploadToCloudinary, uploadPdfToCloudinary, uploadPublicPdfToCloudinary, isCloudinaryConfigured, signCloudinaryRawUrl } from '../utils/cloudinary.util.js';
-import { getR2ObjectBuffer, isR2Configured, isR2TemplateRef, uploadBufferToR2 } from '../utils/r2.util.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { uploadToCloudinary, isCloudinaryConfigured } from '../utils/cloudinary.util.js';
+import { validateFormSchema } from '../utils/form-schema.util.js';
+import { buildTeamInviteUrl, createTeamInviteToken } from '../utils/team-invite-token.util.js';
+import { mapCheckInFailure, mapCheckOutFailure, mapResetFailure, sendMappedFailure } from '../utils/checkin-response.util.js';
+import { validateCertificateTemplateRef } from '../utils/certificate-admin.util.js';
+import { buildAttendeeOrderWhere, mapRegistrationsToAttendees } from '../utils/admin-attendees.util.js';
+import { summarizeRegistrationStatuses } from '../utils/admin-analytics.util.js';
+import { isTicketExpired, markTicketCheckedIn, markTicketCheckedOut, resetTicketCheckIn } from '../services/checkin.service.js';
 
 const router = express.Router();
 
 const EVENT_CATEGORIES = new Set(['MUSIC', 'TECH', 'SPORTS', 'ARTS', 'BUSINESS', 'EDUCATION', 'FOOD', 'HEALTH', 'SOCIAL', 'OTHER']);
 const EVENT_TYPES = new Set(['TICKETED', 'RSVP']);
 const TEAM_ROLES = new Set(['SUPER_MANAGER', 'MANAGER', 'SCANNER', 'STAFF']);
-const CERTIFICATE_TYPE_VALUES = new Set(['participation', 'first_prize', 'second_prize', 'third_prize']);
-const CERTIFICATE_ACCESS_ROLES = ['MANAGER', 'SUPER_MANAGER'];
 
 const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 
@@ -34,6 +33,24 @@ const sendAccessDenied = (res, access) => {
   return res.status(status).json({ error: access.error || 'Not authorized' });
 };
 
+const requireEventMutationAccess = (roles = []) => {
+  return async function requireEventMutationAccessMiddleware(req, res, next) {
+    try {
+      const access = await checkEventAccess(req.user, req.params.id, roles);
+
+      if (!access.hasAccess) {
+        return sendAccessDenied(res, access);
+      }
+
+      req.eventAccess = access;
+      return next();
+    } catch (error) {
+      console.error('Event access check error:', error);
+      return res.status(500).json({ error: 'Failed to verify event access' });
+    }
+  };
+};
+
 const parseRequiredString = (value, fieldName) => {
   const normalized = String(value ?? '').trim();
   if (!normalized) throw badRequest(`${fieldName} is required`);
@@ -41,8 +58,17 @@ const parseRequiredString = (value, fieldName) => {
 };
 
 const parseIntegerField = (value, fieldName, min) => {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < min) {
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    throw badRequest(`${fieldName} must be an integer greater than or equal to ${min}`);
+  }
+
+  const raw = typeof value === 'number' ? String(value) : value.trim();
+  if (!/^-?\d+$/.test(raw)) {
+    throw badRequest(`${fieldName} must be an integer greater than or equal to ${min}`);
+  }
+
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < min || parsed < -2147483648 || parsed > 2147483647) {
     throw badRequest(`${fieldName} must be an integer greater than or equal to ${min}`);
   }
   return parsed;
@@ -70,18 +96,18 @@ const normalizeTeamRole = (role = 'STAFF') => {
   return TEAM_ROLES.has(normalized) ? normalized : null;
 };
 
-const normalizeCertificateType = (certificateType = 'participation') => {
-  const normalized = String(certificateType || 'participation').trim();
-  return CERTIFICATE_TYPE_VALUES.has(normalized) ? normalized : null;
+const withTeamInviteLink = (teamMember) => {
+  if (!teamMember || teamMember.acceptedAt) return teamMember;
+  return {
+    ...teamMember,
+    inviteToken: createTeamInviteToken(teamMember),
+    inviteUrl: buildTeamInviteUrl(teamMember),
+  };
 };
 
-const isTicketExpired = (ticket) => {
-  if (!ticket.validUntil) return false;
-  const graceEnd = new Date(ticket.validUntil.getTime() + 24 * 60 * 60 * 1000);
-  return new Date() > graceEnd;
-};
+const PROTECTED_REGISTRATION_STATUSES = ['PAID', 'CONFIRMED'];
 
-const buildEventUpdateData = (body = {}) => {
+const buildEventUpdateData = (body = {}, { eventId, existingEvent } = {}) => {
   const data = {};
 
   if (hasOwn(body, 'title')) data.title = parseRequiredString(body.title, 'title');
@@ -133,7 +159,12 @@ const buildEventUpdateData = (body = {}) => {
 
   if (hasOwn(body, 'certificateTemplateUrl')) {
     const value = body.certificateTemplateUrl;
-    data.certificateTemplateUrl = value === null || value === '' ? null : parseRequiredString(value, 'certificateTemplateUrl');
+    data.certificateTemplateUrl = value === null || value === ''
+      ? null
+      : validateCertificateTemplateRef(value, {
+        eventId,
+        allowLegacyGlobalTemplateRef: value === existingEvent?.certificateTemplateUrl
+      });
   }
 
   if (hasOwn(body, 'certificateMapping')) {
@@ -151,119 +182,10 @@ const buildEventUpdateData = (body = {}) => {
   return data;
 };
 
-// Lazy load certificate service to avoid startup errors if pdf-lib isn't installed
-let generateCertificate = null;
-let generateTypedCertificate = null;
-let CERTIFICATE_TYPES = null;
-let CERTIFICATE_TYPE_LABELS = null;
-let sendCertificateEmail = null;
-let isEmailDeliveryConfigured = null;
-
-const loadCertificateServices = async () => {
-  if (!generateCertificate) {
-    try {
-      const certService = await import('../services/certificate.service.js');
-      generateCertificate = certService.generateCertificate;
-      generateTypedCertificate = certService.generateTypedCertificate;
-      CERTIFICATE_TYPES = certService.CERTIFICATE_TYPES;
-      CERTIFICATE_TYPE_LABELS = certService.CERTIFICATE_TYPE_LABELS;
-      const emailService = await import('../services/email.service.js');
-      sendCertificateEmail = emailService.sendCertificateEmail;
-      isEmailDeliveryConfigured = emailService.isEmailDeliveryConfigured;
-    } catch (error) {
-      console.error('Failed to load certificate services:', error);
-      throw new Error('Certificate generation not available. Please ensure pdf-lib is installed.');
-    }
-  }
-};
-
-const safeCertificateFilePart = (value) => String(value || '')
-  .trim()
-  .toLowerCase()
-  .replace(/[^a-z0-9._-]+/g, '-')
-  .replace(/^-+|-+$/g, '')
-  .slice(0, 80) || 'recipient';
-
-async function storeGeneratedCertificatePdf({ buffer, eventId, certificateType, recipientEmail }) {
-  const fileName = `${safeCertificateFilePart(certificateType)}-${safeCertificateFilePart(recipientEmail)}-${Date.now()}.pdf`;
-  const key = `certificates/generated/${eventId}/${fileName}`;
-
-  if (isR2Configured()) {
-    return uploadBufferToR2({
-      buffer,
-      key,
-      contentType: 'application/pdf',
-    });
-  }
-
-  if (isCloudinaryConfigured()) {
-    return uploadPublicPdfToCloudinary(buffer, `certificates/generated/${eventId}`);
-  }
-
-  const certificateDir = path.join(__dirname, '../../uploads/certificates/generated', eventId);
-  if (!fs.existsSync(certificateDir)) {
-    fs.mkdirSync(certificateDir, { recursive: true });
-  }
-
-  const destinationPath = path.join(certificateDir, fileName);
-  fs.writeFileSync(destinationPath, buffer);
-  return `/uploads/certificates/generated/${eventId}/${fileName}`;
-}
-
 // All admin routes require authentication
 router.use(authenticate);
 router.use(requireOrganizer);
-
-// Upload certificate template (PDF)
-router.post('/upload', uploadPdf.single('file'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
-    }
-
-    const ext = path.extname(req.file.originalname || '.pdf') || '.pdf';
-    const safeExt = ext.toLowerCase() === '.pdf' ? '.pdf' : '.pdf';
-    const generatedFileName = `certificate-${Date.now()}-${Math.round(Math.random() * 1e9)}${safeExt}`;
-    let fileBuffer = req.file.buffer;
-    if (!fileBuffer && req.file.path && fs.existsSync(req.file.path)) {
-      fileBuffer = fs.readFileSync(req.file.path);
-    }
-
-    if (!fileBuffer) {
-      return res.status(500).json({ error: 'Uploaded file data is missing' });
-    }
-
-    let fileUrl;
-    if (isR2Configured()) {
-      const key = `certificates/templates/${generatedFileName}`;
-      fileUrl = await uploadBufferToR2({
-        buffer: fileBuffer,
-        key,
-        contentType: 'application/pdf',
-      });
-    } else if (isCloudinaryConfigured()) {
-      fileUrl = await uploadPublicPdfToCloudinary(fileBuffer, 'certificates/templates');
-    } else {
-      const certificateUploadDir = path.join(__dirname, '../../uploads');
-      if (!fs.existsSync(certificateUploadDir)) {
-        fs.mkdirSync(certificateUploadDir, { recursive: true });
-      }
-
-      const destinationPath = path.join(certificateUploadDir, generatedFileName);
-      fs.writeFileSync(destinationPath, fileBuffer);
-      fileUrl = `/uploads/${generatedFileName}`;
-    }
-
-    if (req.file.path && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
-
-    res.json({ url: fileUrl });
-  } catch (error) {
-    console.error('Upload error:', error);
-    res.status(500).json({ error: 'Failed to upload file' });
-  }
-});
+router.use(certificateAdminRoutes);
 
 // Create event
 router.post('/events',
@@ -286,19 +208,16 @@ router.post('/events',
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const {
-        title,
-        description,
-        location,
-        startTime,
-        endTime,
-        capacity,
-        priceCents,
-        currency,
-        type,
-        category,
-        tags
-      } = req.body;
+      const title = parseRequiredString(req.body.title, 'title');
+      const type = req.body.type ? String(req.body.type).trim().toUpperCase() : 'TICKETED';
+      const category = req.body.category ? String(req.body.category).trim().toUpperCase() : 'OTHER';
+      const currency = req.body.currency
+        ? parseRequiredString(req.body.currency, 'currency').toUpperCase()
+        : 'INR';
+
+      if (!EVENT_TYPES.has(type)) throw badRequest('type is invalid');
+      if (!EVENT_CATEGORIES.has(category)) throw badRequest('category is invalid');
+      if (!/^[A-Z]{3}$/.test(currency)) throw badRequest('currency must be a 3-letter code');
 
       // Generate slug from title
       const slug = title.toLowerCase()
@@ -310,16 +229,18 @@ router.post('/events',
           organizerId: req.user.id,
           title,
           slug,
-          description,
-          location,
-          startTime: new Date(startTime),
-          endTime: new Date(endTime),
-          capacity,
-          priceCents,
-          currency: currency || 'INR',
-          type: type || 'TICKETED',
-          category: category || 'OTHER',
-          tags: tags || []
+          description: parseRequiredString(req.body.description, 'description'),
+          location: parseRequiredString(req.body.location, 'location'),
+          startTime: parseDateField(req.body.startTime, 'startTime'),
+          endTime: parseDateField(req.body.endTime, 'endTime'),
+          capacity: parseIntegerField(req.body.capacity, 'capacity', 1),
+          priceCents: parseIntegerField(req.body.priceCents, 'priceCents', 0),
+          currency,
+          type,
+          category,
+          tags: Array.isArray(req.body.tags)
+            ? req.body.tags.map((tag) => String(tag || '').trim()).filter(Boolean)
+            : []
         },
         include: {
           organizer: {
@@ -331,7 +252,7 @@ router.post('/events',
       res.status(201).json(event);
     } catch (error) {
       console.error('Create event error:', error);
-      res.status(500).json({ error: 'Failed to create event' });
+      res.status(error.statusCode || 500).json({ error: error.statusCode ? error.message : 'Failed to create event' });
     }
   }
 );
@@ -348,9 +269,16 @@ router.put('/events/:id', async (req, res) => {
       return res.status(403).json({ error: access.error || 'Not authorized' });
     }
 
+    const existingEvent = hasOwn(req.body, 'certificateTemplateUrl')
+      ? await prisma.event.findUnique({
+        where: { id },
+        select: { certificateTemplateUrl: true }
+      })
+      : null;
+
     const updatedEvent = await prisma.event.update({
       where: { id },
-      data: buildEventUpdateData(req.body),
+      data: buildEventUpdateData(req.body, { eventId: id, existingEvent }),
       include: {
         organizer: {
           select: { name: true, email: true }
@@ -385,6 +313,26 @@ router.delete('/events/:id', async (req, res) => {
       return res.status(403).json({ error: 'Not authorized' });
     }
 
+    const protectedRegistration = await prisma.registration.findFirst({
+      where: {
+        eventId: id,
+        OR: [
+          { status: { in: PROTECTED_REGISTRATION_STATUSES } },
+          { orders: { some: { status: 'PAID' } } },
+          { orders: { some: { providerOrderId: { not: null } } } },
+          { orders: { some: { amountCents: { gt: 0 } } } },
+          { orders: { some: { ticket: { isNot: null } } } }
+        ]
+      },
+      select: { id: true }
+    });
+
+    if (protectedRegistration) {
+      return res.status(409).json({
+        error: 'This event has paid, payment-started, or ticketed registrations. Archive or cancel it instead of deleting financial records.'
+      });
+    }
+
     await prisma.event.delete({
       where: { id }
     });
@@ -397,7 +345,7 @@ router.delete('/events/:id', async (req, res) => {
 });
 
 // Upload event poster
-router.post('/events/:id/poster-upload', upload.single('poster'), async (req, res) => {
+router.post('/events/:id/poster-upload', requireEventMutationAccess(['MANAGER', 'SUPER_MANAGER']), upload.single('poster'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -405,25 +353,11 @@ router.post('/events/:id/poster-upload', upload.single('poster'), async (req, re
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
-    const event = await prisma.event.findUnique({
-      where: { id }
-    });
-
-    if (!event) {
-      return res.status(404).json({ error: 'Event not found' });
-    }
-
-    if (event.organizerId !== req.user.id && req.user.role !== 'ADMIN') {
-      return res.status(403).json({ error: 'Not authorized' });
-    }
-
     // Upload to cloud storage or use local path
     let posterUrl;
     if (isCloudinaryConfigured()) {
       // Use Cloudinary (recommended for production)
-      console.log('📸 Uploading to Cloudinary...');
       posterUrl = await uploadToCloudinary(req.file.buffer, 'posters');
-      console.log('✅ Cloudinary URL:', posterUrl);
     } else if (process.env.NODE_ENV === 'production' && process.env.AWS_ACCESS_KEY_ID) {
       // Fallback to S3
       posterUrl = await uploadToS3(req.file);
@@ -432,12 +366,10 @@ router.post('/events/:id/poster-upload', upload.single('poster'), async (req, re
       posterUrl = `/uploads/${req.file.filename}`;
     }
 
-    console.log('💾 Saving posterUrl to DB for event:', id);
     const updatedEvent = await prisma.event.update({
       where: { id },
       data: { posterUrl }
     });
-    console.log('✅ DB updated, posterUrl now:', updatedEvent.posterUrl);
 
     res.json({ posterUrl: updatedEvent.posterUrl });
   } catch (error) {
@@ -459,19 +391,23 @@ router.post('/events/:id/form', async (req, res) => {
       return res.status(403).json({ error: access.error || 'Not authorized' });
     }
 
+    const normalizedSchema = validateFormSchema(schemaJson);
+
     const form = await prisma.form.upsert({
       where: { eventId: id },
-      update: { schemaJson },
+      update: { schemaJson: normalizedSchema },
       create: {
         eventId: id,
-        schemaJson
+        schemaJson: normalizedSchema
       }
     });
 
     res.json(form);
   } catch (error) {
     console.error('Create form error:', error);
-    res.status(500).json({ error: 'Failed to create form' });
+    res.status(error.statusCode || 500).json({
+      error: error.statusCode ? error.message : 'Failed to create form'
+    });
   }
 });
 
@@ -510,7 +446,7 @@ router.get('/events', async (req, res) => {
 router.get('/events/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const access = await checkEventAccess(req.user, id);
+    const access = await checkEventAccess(req.user, id, ['MANAGER', 'SUPER_MANAGER']);
 
     if (!access.hasAccess) {
       return sendAccessDenied(res, access);
@@ -583,7 +519,17 @@ router.delete('/registrations/:regId', async (req, res) => {
 
     const registration = await prisma.registration.findUnique({
       where: { id: regId },
-      include: { event: true }
+      include: {
+        event: true,
+        orders: {
+          select: {
+            status: true,
+            providerOrderId: true,
+            amountCents: true,
+            ticket: { select: { id: true } }
+          }
+        }
+      }
     });
 
     if (!registration) {
@@ -594,7 +540,20 @@ router.delete('/registrations/:regId', async (req, res) => {
       return res.status(403).json({ error: 'Not authorized' });
     }
 
-    // Delete registration (cascades to orders and tickets)
+    const hasProtectedRecords = PROTECTED_REGISTRATION_STATUSES.includes(registration.status)
+      || registration.orders.some((order) =>
+        order.status === 'PAID'
+        || order.providerOrderId
+        || order.amountCents > 0
+        || order.ticket
+      );
+
+    if (hasProtectedRecords) {
+      return res.status(409).json({
+        error: 'Paid, payment-started, or ticketed registrations cannot be deleted. Revoke or cancel the ticket instead.'
+      });
+    }
+
     await prisma.registration.delete({
       where: { id: regId }
     });
@@ -642,10 +601,12 @@ router.get('/events/:id/analytics', async (req, res) => {
     });
 
     const totalRegistrations = registrations.length;
-    const paidRegistrations = registrations.filter(r => r.status === 'PAID').length;
-    const pendingRegistrations = registrations.filter(r => r.status === 'PENDING').length;
-    const failedRegistrations = registrations.filter(r => r.status === 'FAILED').length;
-    const cancelledRegistrations = registrations.filter(r => r.status === 'CANCELLED').length;
+    const {
+      paidRegistrations,
+      pendingRegistrations,
+      failedRegistrations,
+      cancelledRegistrations
+    } = summarizeRegistrationStatuses(registrations);
 
     // Revenue calculation
     const paidOrders = registrations.flatMap(r => r.orders.filter(o => o.status === 'PAID'));
@@ -876,11 +837,15 @@ router.post('/broadcast',
           return res.status(400).json({ error: 'Event ID is required for event broadcast' });
         }
 
-        // Get unique emails from registrations for this event
+        const access = await checkEventAccess(req.user, eventId, ['SUPER_MANAGER']);
+        if (!access.hasAccess) {
+          return sendAccessDenied(res, access);
+        }
+
         const registrations = await prisma.registration.findMany({
           where: {
             eventId: eventId,
-            status: { in: ['PAID', 'PENDING'] } // Include pending? Maybe just PAID. Let's do both for now as a "reminder"
+            status: { in: PROTECTED_REGISTRATION_STATUSES }
           },
           select: { userEmail: true },
           distinct: ['userEmail']
@@ -888,8 +853,14 @@ router.post('/broadcast',
         users = registrations.map(r => r.userEmail);
 
       } else {
-        // ALL users (unique emails across all registrations)
+        if (req.user.role !== 'ADMIN') {
+          return res.status(403).json({ error: 'Admin access required for all-event broadcasts' });
+        }
+
         const registrations = await prisma.registration.findMany({
+          where: {
+            status: { in: PROTECTED_REGISTRATION_STATUSES }
+          },
           select: { userEmail: true },
           distinct: ['userEmail']
         });
@@ -900,20 +871,14 @@ router.post('/broadcast',
         return res.json({ message: 'No recipients found', count: 0 });
       }
 
-      // Send in background (basic loop for now)
-      // In production, this should go to a queue
       const { sendCustomEmail } = await import('../services/email.service.js');
 
-      // Sending individually to hide other recipients (BCC effect)
-      // Or use BCC in one mail if list is small.
-      // Safe approach: Loop.
       console.log(`Broadcasting to ${users.length} users: ${subject}`);
 
-      // Process in chunks or just background it completely
       (async () => {
         try {
           for (const email of users) {
-            await sendCustomEmail(email, subject, content); // Wait or Promise.all
+            await sendCustomEmail(email, subject, content);
           }
           console.log('Broadcast complete');
         } catch (e) {
@@ -1105,11 +1070,7 @@ router.get('/events/:id/attendees', async (req, res) => {
       return res.status(403).json({ error: 'Not authorized' });
     }
 
-    // Build filter conditions
-    let ticketWhere = {};
-    if (status === 'checked-in') ticketWhere.checkedInAt = { not: null };
-    if (status === 'not-checked-in') ticketWhere.checkedInAt = null;
-    if (status === 'checked-out') ticketWhere.checkedOutAt = { not: null };
+    const orderWhere = buildAttendeeOrderWhere(status);
 
     const registrations = await prisma.registration.findMany({
       where: {
@@ -1124,7 +1085,7 @@ router.get('/events/:id/attendees', async (req, res) => {
       },
       include: {
         orders: {
-          where: { status: 'PAID' },
+          where: orderWhere,
           include: {
             ticket: true
           }
@@ -1133,32 +1094,7 @@ router.get('/events/:id/attendees', async (req, res) => {
       orderBy: { createdAt: 'desc' }
     });
 
-    // Flatten to attendees list with check-in info
-    const attendees = registrations.flatMap(reg =>
-      reg.orders
-        .filter(o => o.ticket)
-        .filter(o => {
-          if (status === 'checked-in') return o.ticket.checkedInAt;
-          if (status === 'not-checked-in') return !o.ticket.checkedInAt;
-          if (status === 'checked-out') return o.ticket.checkedOutAt;
-          return true;
-        })
-        .map(order => ({
-          id: order.ticket.id,
-          ticketId: order.ticket.id,
-          ticketShortId: order.ticket.id.substring(0, 8).toUpperCase(),
-          orderId: order.id,
-          name: reg.formResponse?.name || 'N/A',
-          email: reg.userEmail,
-          phone: reg.formResponse?.phone || null,
-          checkedInAt: order.ticket.checkedInAt,
-          checkedOutAt: order.ticket.checkedOutAt,
-          checkedInBy: order.ticket.checkedInBy,
-          issuedAt: order.ticket.issuedAt,
-          bookedAt: reg.createdAt,
-          revoked: order.ticket.revoked
-        }))
-    );
+    const attendees = mapRegistrationsToAttendees(registrations, status);
 
     res.json(attendees);
   } catch (error) {
@@ -1249,52 +1185,30 @@ router.post('/tickets/:ticketId/checkin', async (req, res) => {
     }
 
     if (ticket.revoked) {
-      return res.status(400).json({ error: 'Ticket has been revoked' });
+      return sendMappedFailure(res, mapCheckInFailure({ blockedReason: 'revoked' }));
     }
 
     if (isTicketExpired(ticket)) {
-      return res.status(400).json({ error: 'Ticket has expired' });
+      return sendMappedFailure(res, mapCheckInFailure({ blockedReason: 'expired' }));
     }
 
     if (ticket.scannedAt || ticket.checkedInAt) {
-      return res.status(400).json({
-        error: 'Already checked in',
-        checkedInAt: ticket.checkedInAt || ticket.scannedAt
-      });
+      return sendMappedFailure(res, mapCheckInFailure({
+        blockedReason: 'already-checked-in',
+        checkedInAt: ticket.checkedInAt,
+        scannedAt: ticket.scannedAt
+      }));
     }
 
-    const now = new Date();
-    const updateResult = await prisma.ticket.updateMany({
-      where: {
-        id: ticketId,
-        scannedAt: null,
-        checkedInAt: null
-      },
-      data: {
-        checkedInAt: now,
-        checkedInBy: req.user.id,
-        scannedAt: now
-      }
-    });
-
-    if (updateResult.count === 0) {
-      const currentTicket = await prisma.ticket.findUnique({
-        where: { id: ticketId },
-        select: { scannedAt: true, checkedInAt: true }
-      });
-
-      return res.status(400).json({
-        error: 'Already checked in',
-        checkedInAt: currentTicket?.checkedInAt || currentTicket?.scannedAt || now
-      });
+    const checkInResult = await markTicketCheckedIn(ticketId, req.user.id);
+    if (!checkInResult.checkedIn) {
+      return sendMappedFailure(res, mapCheckInFailure(checkInResult));
     }
-
-    const updatedTicket = await prisma.ticket.findUnique({ where: { id: ticketId } });
 
     res.json({
       success: true,
       message: 'Checked in successfully',
-      ticket: updatedTicket
+      ticket: checkInResult.ticket
     });
   } catch (error) {
     console.error('Check-in error:', error);
@@ -1327,28 +1241,19 @@ router.post('/tickets/:ticketId/checkout', async (req, res) => {
       return res.status(403).json({ error: 'Not authorized' });
     }
 
-    if (!ticket.checkedInAt) {
-      return res.status(400).json({ error: 'Not checked in yet' });
+    if (ticket.order.status !== 'PAID') {
+      return res.status(400).json({ error: 'Ticket is not paid' });
     }
 
-    if (ticket.checkedOutAt) {
-      return res.status(400).json({
-        error: 'Already checked out',
-        checkedOutAt: ticket.checkedOutAt
-      });
+    const checkOutResult = await markTicketCheckedOut(ticketId);
+    if (!checkOutResult.success) {
+      return sendMappedFailure(res, mapCheckOutFailure(checkOutResult));
     }
-
-    const updatedTicket = await prisma.ticket.update({
-      where: { id: ticketId },
-      data: {
-        checkedOutAt: new Date()
-      }
-    });
 
     res.json({
       success: true,
       message: 'Checked out successfully',
-      ticket: updatedTicket
+      ticket: checkOutResult.ticket
     });
   } catch (error) {
     console.error('Check-out error:', error);
@@ -1381,20 +1286,23 @@ router.post('/tickets/:ticketId/reset-checkin', async (req, res) => {
       return res.status(403).json({ error: 'Not authorized' });
     }
 
-    const updatedTicket = await prisma.ticket.update({
-      where: { id: ticketId },
-      data: {
-        scannedAt: null,
-        checkedInAt: null,
-        checkedOutAt: null,
-        checkedInBy: null
-      }
+    if (ticket.order.status !== 'PAID') {
+      return res.status(400).json({ error: 'Ticket is not paid' });
+    }
+
+    const resetResult = await resetTicketCheckIn(ticketId, {
+      scannedAt: ticket.scannedAt,
+      checkedInAt: ticket.checkedInAt,
+      checkedOutAt: ticket.checkedOutAt
     });
+    if (!resetResult.success) {
+      return sendMappedFailure(res, mapResetFailure(resetResult));
+    }
 
     res.json({
       success: true,
       message: 'Check-in reset',
-      ticket: updatedTicket
+      ticket: resetResult.ticket
     });
   } catch (error) {
     console.error('Reset check-in error:', error);
@@ -1587,7 +1495,7 @@ router.get('/events/:id/team', async (req, res) => {
       orderBy: { invitedAt: 'desc' }
     });
 
-    res.json(teamMembers);
+    res.json(teamMembers.map(withTeamInviteLink));
   } catch (error) {
     console.error('Get team members error:', error);
     res.status(500).json({ error: 'Failed to fetch team members' });
@@ -1634,7 +1542,7 @@ router.post('/events/:id/team', async (req, res) => {
       }
     });
 
-    res.status(201).json(teamMember);
+    res.status(201).json(withTeamInviteLink(teamMember));
   } catch (error) {
     console.error('Invite team member error:', error);
     res.status(500).json({ error: 'Failed to invite team member' });
@@ -1701,527 +1609,6 @@ router.delete('/events/:id/team/:memberId', async (req, res) => {
   } catch (error) {
     console.error('Remove team member error:', error);
     res.status(500).json({ error: 'Failed to remove team member' });
-  }
-});
-
-// Test/Preview Certificate - generates a sample certificate with dummy data
-router.post('/events/:id/certificates/test', async (req, res) => {
-  try {
-    await loadCertificateServices();
-  } catch (error) {
-    return res.status(500).json({ error: 'Certificate service unavailable: ' + error.message });
-  }
-
-  try {
-    const { id } = req.params;
-    const { templateUrl, mapping, certificateType } = req.body;
-    const selectedCertificateType = normalizeCertificateType(certificateType);
-
-    if (!selectedCertificateType) {
-      return res.status(400).json({ error: 'Invalid certificate type' });
-    }
-
-    const access = await checkEventAccess(req.user, id, CERTIFICATE_ACCESS_ROLES);
-    if (!access.hasAccess) {
-      return sendAccessDenied(res, access);
-    }
-
-    console.log('Test certificate request:', {
-      eventId: id,
-      certificateType: selectedCertificateType,
-      hasTemplateUrl: !!templateUrl,
-      templateUrlType: templateUrl ? (templateUrl.startsWith('data:') ? 'data-url' : templateUrl.substring(0, 80)) : 'none',
-      mappingCount: mapping?.length || 0
-    });
-
-    // Use provided template/mapping or fetch from event
-    let finalTemplateUrl = templateUrl;
-    let finalMapping = mapping;
-
-    if (!templateUrl || !mapping) {
-      const event = await prisma.event.findUnique({
-        where: { id }
-      });
-
-      if (!event) return res.status(404).json({ error: 'Event not found' });
-
-      // If a specific certificate type is requested, look in certificateConfigs
-      if (selectedCertificateType && event.certificateConfigs) {
-        const configs = event.certificateConfigs;
-        const config = configs[selectedCertificateType];
-        if (config) {
-          finalTemplateUrl = finalTemplateUrl || config.templateUrl;
-          finalMapping = finalMapping || config.mapping;
-        }
-      }
-
-      // Fallback to legacy fields
-      if (!finalTemplateUrl) {
-        finalTemplateUrl = event.certificateTemplateUrl;
-      }
-      if (!finalMapping) {
-        finalMapping = event.certificateMapping;
-      }
-    }
-
-    if (!finalTemplateUrl) {
-      return res.status(400).json({ error: 'No template URL provided. Please upload and save a PDF template first.' });
-    }
-
-    // Generate with sample data
-    const typeLabel = CERTIFICATE_TYPE_LABELS[selectedCertificateType] || selectedCertificateType;
-    const sampleData = {
-      userName: 'John Doe',
-      eventName: 'Sample Event Name',
-      date: new Date().toDateString(),
-      qrCode: 'TEST-QR-12345',
-      certificateType: typeLabel,
-      rank: selectedCertificateType === 'first_prize' ? '1st Place' :
-            selectedCertificateType === 'second_prize' ? '2nd Place' :
-            selectedCertificateType === 'third_prize' ? '3rd Place' : ''
-    };
-
-    console.log('Generating test certificate with template type:',
-      finalTemplateUrl.startsWith('data:') ? 'data-url' : finalTemplateUrl.substring(0, 80),
-      'mapping fields:', (finalMapping || []).map(m => m.fieldId).join(', ')
-    );
-
-    const pdfBytes = await generateCertificate(finalTemplateUrl, finalMapping || [], sampleData);
-
-    // Return as PDF
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'inline; filename="test-certificate.pdf"');
-    res.send(Buffer.from(pdfBytes));
-
-  } catch (error) {
-    console.error('Test certificate error:', error);
-    res.status(500).json({ error: 'Failed to generate test certificate: ' + error.message });
-  }
-});
-
-// Save certificate config for a specific type
-router.put('/events/:id/certificates/config', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { certificateType, templateUrl, mapping, enabled } = req.body;
-    const selectedCertificateType = normalizeCertificateType(certificateType);
-
-    if (!selectedCertificateType) {
-      return res.status(400).json({ error: 'Invalid certificate type' });
-    }
-
-    const access = await checkEventAccess(req.user, id, ['MANAGER', 'SUPER_MANAGER']);
-    if (!access.hasAccess) {
-      return sendAccessDenied(res, access);
-    }
-
-    const event = await prisma.event.findUnique({ where: { id } });
-    if (!event) return res.status(404).json({ error: 'Event not found' });
-
-    const configs = { ...(event.certificateConfigs || {}) };
-    configs[selectedCertificateType] = {
-      templateUrl: templateUrl || configs[selectedCertificateType]?.templateUrl,
-      mapping: mapping || configs[selectedCertificateType]?.mapping || [],
-      enabled: enabled !== undefined ? enabled : true,
-    };
-
-    // Also set legacy fields if this is the participation certificate
-    const updateData = {
-      certificateConfigs: configs,
-      certificateEnabled: true,
-    };
-
-    if (selectedCertificateType === 'participation') {
-      updateData.certificateTemplateUrl = configs[selectedCertificateType].templateUrl;
-      updateData.certificateMapping = configs[selectedCertificateType].mapping;
-    }
-
-    const updated = await prisma.event.update({
-      where: { id },
-      data: updateData,
-    });
-
-    res.json({ success: true, certificateConfigs: updated.certificateConfigs });
-  } catch (error) {
-    console.error('Save certificate config error:', error);
-    res.status(500).json({ error: 'Failed to save certificate config' });
-  }
-});
-
-// Get certificate configs for an event
-router.get('/events/:id/certificates/config', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const access = await checkEventAccess(req.user, id, CERTIFICATE_ACCESS_ROLES);
-    if (!access.hasAccess) {
-      return sendAccessDenied(res, access);
-    }
-
-    const event = await prisma.event.findUnique({
-      where: { id },
-      select: {
-        certificateEnabled: true,
-        certificateTemplateUrl: true,
-        certificateMapping: true,
-        certificateConfigs: true,
-      }
-    });
-
-    if (!event) return res.status(404).json({ error: 'Event not found' });
-
-    // Build unified config - merge legacy fields into configs if needed
-    const configs = { ...(event.certificateConfigs || {}) };
-
-    // If legacy fields exist but not in configs, add them as participation
-    if (event.certificateTemplateUrl && !configs.participation) {
-      configs.participation = {
-        templateUrl: event.certificateTemplateUrl,
-        mapping: event.certificateMapping || [],
-        enabled: event.certificateEnabled,
-      };
-    }
-
-    res.json({
-      certificateEnabled: event.certificateEnabled,
-      configs,
-    });
-  } catch (error) {
-    console.error('Get certificate config error:', error);
-    res.status(500).json({ error: 'Failed to get certificate config' });
-  }
-});
-
-// Proxy endpoint: serve certificate template PDF (avoids Cloudinary 401 for raw files)
-router.get('/events/:id/certificates/template', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const type = normalizeCertificateType(req.query.type || 'participation');
-
-    if (!type) {
-      return res.status(400).json({ error: 'Invalid certificate type' });
-    }
-
-    const access = await checkEventAccess(req.user, id, CERTIFICATE_ACCESS_ROLES);
-    if (!access.hasAccess) {
-      return sendAccessDenied(res, access);
-    }
-
-    const event = await prisma.event.findUnique({
-      where: { id },
-      select: {
-        certificateTemplateUrl: true,
-        certificateConfigs: true,
-      }
-    });
-
-    if (!event) return res.status(404).json({ error: 'Event not found' });
-
-    // Find the template URL
-    const configs = { ...(event.certificateConfigs || {}) };
-    let templateUrl = configs[type]?.templateUrl || event.certificateTemplateUrl;
-
-    if (!templateUrl) {
-      return res.status(404).json({ error: 'No template configured' });
-    }
-
-    // Serve from R2 directly
-    if (isR2TemplateRef(templateUrl)) {
-      try {
-        const buffer = await getR2ObjectBuffer(templateUrl);
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Cache-Control', 'public, max-age=3600');
-        return res.send(buffer);
-      } catch (r2Err) {
-        console.error('R2 fetch failed for template:', r2Err.message);
-        return res.status(500).json({ error: 'Failed to fetch template from storage' });
-      }
-    }
-
-    // For any HTTP URL (Cloudinary or otherwise), fetch with retries
-    if (templateUrl.startsWith('http')) {
-      let buffer = null;
-
-      // For Cloudinary URLs, use the dedicated download helper
-      if (templateUrl.includes('cloudinary.com')) {
-        try {
-          const { downloadCloudinaryBuffer } = await import('../utils/cloudinary.util.js');
-          buffer = await downloadCloudinaryBuffer(templateUrl);
-          if (buffer) console.log('Cloudinary download success:', buffer.length, 'bytes');
-        } catch (err) {
-          console.error('Cloudinary download error:', err.message);
-        }
-      }
-
-      // For non-Cloudinary URLs or if Cloudinary download failed, try direct fetch
-      if (!buffer) {
-        try {
-          const response = await fetch(templateUrl);
-          if (response.ok) {
-            buffer = Buffer.from(await response.arrayBuffer());
-          } else {
-            console.error('Template direct fetch failed:', response.status, response.statusText);
-          }
-        } catch (fetchErr) {
-          console.error('Template fetch error:', fetchErr.message);
-        }
-      }
-
-      if (!buffer) {
-        return res.status(502).json({ error: 'Failed to fetch template from remote source' });
-      }
-
-      // Auto-migrate to R2 for future reliability
-      if (isR2Configured() && !isR2TemplateRef(templateUrl)) {
-        try {
-          const key = `certificates/templates/migrated-${id}-${type}-${Date.now()}.pdf`;
-          const r2Url = await uploadBufferToR2({ buffer, key, contentType: 'application/pdf' });
-          // Update the event config to use R2 URL
-          if (configs[type]?.templateUrl) {
-            configs[type].templateUrl = r2Url;
-            await prisma.event.update({ where: { id }, data: { certificateConfigs: configs } });
-          }
-          if (event.certificateTemplateUrl === templateUrl) {
-            await prisma.event.update({ where: { id }, data: { certificateTemplateUrl: r2Url } });
-          }
-          console.log('Auto-migrated certificate template to R2:', r2Url);
-        } catch (migrateErr) {
-          console.error('Auto-migrate to R2 failed (non-fatal):', migrateErr.message);
-        }
-      }
-
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Cache-Control', 'public, max-age=3600');
-      return res.send(buffer);
-    }
-
-    // For local files, read from disk
-    if (!templateUrl.startsWith('http')) {
-      const localPath = templateUrl.startsWith('/uploads/')
-        ? path.join(__dirname, '../../', templateUrl)
-        : path.join(__dirname, '../../uploads/', templateUrl);
-
-      if (!fs.existsSync(localPath)) {
-        return res.status(404).json({ error: 'Template file not found' });
-      }
-
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Cache-Control', 'public, max-age=3600');
-      return res.send(fs.readFileSync(localPath));
-    }
-
-    return res.status(400).json({ error: 'Unsupported template URL format' });
-  } catch (error) {
-    console.error('Template proxy error:', error);
-    res.status(500).json({ error: 'Failed to fetch template' });
-  }
-});
-
-// Send Certificates to checked-in users (supports typed certificates)
-router.post('/events/:id/certificates', async (req, res) => {
-  try {
-    await loadCertificateServices();
-  } catch (error) {
-    return res.status(500).json({ error: 'Certificate service unavailable: ' + error.message });
-  }
-
-  try {
-    const { id } = req.params;
-    const { dryRun, certificateType = 'participation', recipientEmails } = req.body;
-    const selectedCertificateType = normalizeCertificateType(certificateType);
-
-    if (!selectedCertificateType) {
-      return res.status(400).json({ error: 'Invalid certificate type' });
-    }
-
-    if (recipientEmails !== undefined && !Array.isArray(recipientEmails)) {
-      return res.status(400).json({ error: 'recipientEmails must be an array' });
-    }
-
-    const access = await checkEventAccess(req.user, id, CERTIFICATE_ACCESS_ROLES);
-    if (!access.hasAccess) {
-      return sendAccessDenied(res, access);
-    }
-
-    const event = await prisma.event.findUnique({
-      where: { id }
-    });
-
-    if (!event) return res.status(404).json({ error: 'Event not found' });
-
-    // Check if the requested certificate type has a config
-    const configs = { ...(event.certificateConfigs || {}) };
-    const typeConfig = configs[selectedCertificateType];
-    const hasLegacyConfig = selectedCertificateType === 'participation' && event.certificateTemplateUrl;
-
-    if (!typeConfig?.templateUrl && !hasLegacyConfig) {
-      return res.status(400).json({ error: `No template configured for certificate type: ${selectedCertificateType}` });
-    }
-
-    // Resolve the template URL (may need migration from Cloudinary to R2)
-    let resolvedTemplateUrl = typeConfig?.templateUrl || event.certificateTemplateUrl;
-
-    // If it's a Cloudinary URL, download via API and migrate to R2
-    if (resolvedTemplateUrl && resolvedTemplateUrl.includes('cloudinary.com')) {
-      try {
-        const { downloadCloudinaryBuffer } = await import('../utils/cloudinary.util.js');
-        const templateBuffer = await downloadCloudinaryBuffer(resolvedTemplateUrl);
-
-        if (templateBuffer && isR2Configured()) {
-          const key = `certificates/templates/migrated-${id}-${selectedCertificateType}-${Date.now()}.pdf`;
-          const r2Url = await uploadBufferToR2({ buffer: templateBuffer, key, contentType: 'application/pdf' });
-          // Update event config
-          if (typeConfig?.templateUrl) {
-            configs[selectedCertificateType].templateUrl = r2Url;
-            await prisma.event.update({ where: { id }, data: { certificateConfigs: configs } });
-          }
-          if (event.certificateTemplateUrl === resolvedTemplateUrl) {
-            await prisma.event.update({ where: { id }, data: { certificateTemplateUrl: r2Url } });
-          }
-          resolvedTemplateUrl = r2Url;
-          console.log('Migrated certificate template to R2 before sending:', r2Url);
-        } else if (!templateBuffer) {
-          console.error('Cloudinary download returned null — certificate sending may fail');
-        }
-      } catch (migrateErr) {
-        console.error('Template migration failed (will try direct fetch):', migrateErr.message);
-      }
-    }
-
-    // For prize certificates, use recipientEmails; for participation, use checked-in attendees
-    let recipients = [];
-
-    if (recipientEmails && recipientEmails.length > 0) {
-      // Sending to specific recipients (prize certificates)
-      recipients = recipientEmails
-        .map(email => String(email || '').trim().toLowerCase())
-        .filter(Boolean)
-        .map(email => ({ email, userName: email.split('@')[0] }));
-
-      // Try to resolve names from users table
-      for (let i = 0; i < recipients.length; i++) {
-        const user = await prisma.user.findUnique({ where: { email: recipients[i].email } });
-        if (user) recipients[i].userName = user.name;
-      }
-    } else {
-      // Find checked-in tickets (participation certificates)
-      // Check both checkedInAt (new) and scannedAt (legacy) for backward compatibility
-      const tickets = await prisma.ticket.findMany({
-        where: {
-          OR: [
-            { checkedInAt: { not: null } },
-            { scannedAt: { not: null } }
-          ],
-          order: {
-            registration: {
-              eventId: id
-            },
-            status: 'PAID'
-          }
-        },
-        include: {
-          order: {
-            include: {
-              registration: true
-            }
-          }
-        }
-      });
-
-      if (tickets.length === 0) {
-        return res.json({ message: 'No checked-in attendees found', count: 0 });
-      }
-
-      for (const ticket of tickets) {
-        const registration = ticket.order.registration;
-        const user = await prisma.user.findUnique({ where: { email: registration.userEmail } });
-        const userName = user ? user.name : (registration.formResponse?.name || registration.userEmail.split('@')[0]);
-        recipients.push({ email: registration.userEmail, userName, ticketId: ticket.id });
-      }
-    }
-
-    if (dryRun) {
-      return res.json({ message: 'Dry run complete', count: recipients.length });
-    }
-
-    let sentCount = 0;
-    let generatedCount = 0;
-    const errors = [];
-    const emailErrors = [];
-    const generatedCertificates = [];
-    const templateMapping = typeConfig?.mapping || event.certificateMapping || [];
-    const typeLabel = CERTIFICATE_TYPE_LABELS[selectedCertificateType] || 'Participation';
-    const emailConfigured = isEmailDeliveryConfigured?.() === true;
-
-    for (const recipient of recipients) {
-      try {
-        const pdfBytes = await generateCertificate(
-          resolvedTemplateUrl,
-          templateMapping,
-          {
-            userName: recipient.userName,
-            eventName: event.title,
-            date: event.startTime.toDateString(),
-            qrCode: recipient.ticketId || recipient.email,
-            certificateType: typeLabel,
-            rank: selectedCertificateType === 'first_prize' ? '1st Place' :
-                  selectedCertificateType === 'second_prize' ? '2nd Place' :
-                  selectedCertificateType === 'third_prize' ? '3rd Place' : ''
-          }
-        );
-        const pdfBuffer = Buffer.from(pdfBytes);
-        const certificateUrl = await storeGeneratedCertificatePdf({
-          buffer: pdfBuffer,
-          eventId: id,
-          certificateType: selectedCertificateType,
-          recipientEmail: recipient.email
-        });
-        generatedCount++;
-        generatedCertificates.push({
-          email: recipient.email,
-          userName: recipient.userName,
-          certificateUrl
-        });
-
-        if (emailConfigured) {
-          try {
-            await sendCertificateEmail(
-              recipient.email,
-              recipient.userName,
-              event.title,
-              pdfBuffer,
-              typeLabel
-            );
-            sentCount++;
-          } catch (emailError) {
-            console.error(`Generated ${selectedCertificateType} cert but email failed for ${recipient.email}:`, emailError.message);
-            emailErrors.push({ email: recipient.email, error: emailError.message, certificateUrl });
-          }
-        }
-      } catch (err) {
-        console.error(`Failed to generate ${selectedCertificateType} cert for ${recipient.email}:`, err.message);
-        errors.push({ email: recipient.email, error: err.message });
-      }
-    }
-
-    const deliveryNote = emailConfigured
-      ? `emailed to ${sentCount} recipients`
-      : 'email delivery is not configured; generated PDF links are returned';
-
-    res.json({
-      message: `${typeLabel} certificates generated for ${generatedCount} recipients; ${deliveryNote}`,
-      sent: sentCount,
-      generated: generatedCount,
-      failed: errors.length,
-      emailFailed: emailErrors.length,
-      total: recipients.length,
-      certificates: generatedCertificates,
-      errors: errors.length > 0 ? errors : undefined,
-      emailErrors: emailErrors.length > 0 ? emailErrors : undefined
-    });
-
-  } catch (error) {
-    console.error('Certificate generation error:', error);
-    res.status(500).json({ error: 'Failed to generate certificates: ' + error.message });
   }
 });
 

@@ -74,7 +74,11 @@ export default function LoginPage() {
                   <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-[#756d66]" size={18} />
                   <input
                     id="email"
+                    name="email"
                     type="email"
+                    autoComplete="username"
+                    inputMode="email"
+                    spellCheck={false}
                     required
                     className="auth-input pl-11"
                     placeholder="you@example.com"
@@ -90,7 +94,9 @@ export default function LoginPage() {
                   <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-[#756d66]" size={18} />
                   <input
                     id="password"
+                    name="password"
                     type="password"
+                    autoComplete="current-password"
                     required
                     className="auth-input pl-11"
                     placeholder="Enter your password"

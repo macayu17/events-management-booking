@@ -44,9 +44,8 @@ A full-stack event management platform built with React + Node.js + PostgreSQL t
 - Tailwind CSS
 - React Router v6
 - React Hook Form
-- Motion (animations)
 - Lucide Icons
-- Three.js (3D backgrounds)
+- React PDF / PDF.js for certificate previews
 
 ### Backend
 - Node.js + Express
@@ -60,7 +59,7 @@ A full-stack event management platform built with React + Node.js + PostgreSQL t
 
 ## 📋 Prerequisites
 
-- Node.js v18+
+- Node.js v22.12+
 - PostgreSQL database
 
 ## 🚀 Quick Start
@@ -76,9 +75,9 @@ CREATE DATABASE event_management;
 ```bash
 cd backend
 npm install
-# Configure .env with your DATABASE_URL
+# Copy .env.example to .env and configure DATABASE_URL/JWT_SECRET/QR_SECRET_KEY
 npm run prisma:generate
-npm run prisma:migrate
+npm run prisma:migrate:dev
 npm run dev
 ```
 Backend runs on `http://localhost:5000`
@@ -100,6 +99,7 @@ DATABASE_URL=postgresql://user:password@localhost:5432/event_management
 JWT_SECRET=your_jwt_secret
 RAZORPAY_KEY_ID=your_razorpay_key_id
 RAZORPAY_KEY_SECRET=your_razorpay_secret
+RAZORPAY_WEBHOOK_SECRET=your_razorpay_webhook_secret
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USER=your_email@gmail.com
@@ -118,8 +118,9 @@ ALLOW_UNSIGNED_TICKET_SCAN=false
 PHONEPE_CLIENT_ID=your_phonepe_client_id
 PHONEPE_CLIENT_SECRET=your_phonepe_client_secret
 PHONEPE_CLIENT_VERSION=1
-PHONEPE_SALT_INDEX=1
 PHONEPE_ENV=sandbox
+TRUST_PROXY=false
+APP_VERSION=local
 ```
 
 ### Frontend (.env)
@@ -129,11 +130,14 @@ VITE_RAZORPAY_KEY_ID=your_razorpay_key_id
 VITE_ENABLE_PWA=false
 ```
 
+`VITE_API_URL` is required for production frontend builds so deployed clients never fall back to localhost.
+
 ## 🚢 Deployment
 
 - **Backend**: Deploy to Azure App Service
 - **Frontend**: Deploy to Vercel with `VITE_API_URL` pointed at the Azure backend `/api` URL
 - **Database**: Use Neon or Supabase for PostgreSQL
+- **Migrations**: CI runs backend tests before `npm run prisma:migrate:deploy`; Azure startup only runs migrations when `AZURE_RUN_PRISMA_MIGRATIONS=true` is explicitly set.
 
 ## 📄 License
 

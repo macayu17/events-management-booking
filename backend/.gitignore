@@ -4,6 +4,12 @@ uploads/
 dist/
 build/
 *.log
+*.dump
+*.backup
+*.sql
+!prisma/migrations/
+!prisma/migrations/**/
+!prisma/migrations/**/migration.sql
 .DS_Store
 coverage/
 .vscode/

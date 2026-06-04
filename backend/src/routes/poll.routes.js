@@ -3,6 +3,12 @@ import { body, validationResult } from 'express-validator';
 import prisma from '../config/db.js';
 import { authenticate, requireOrganizer } from '../middleware/auth.middleware.js';
 import { sendCustomEmail } from '../services/email.service.js';
+import { recordPollVote } from '../services/poll-vote.service.js';
+import {
+    parseBooleanInput,
+    parseNullableDateInput,
+    parseOptionalBooleanInput
+} from '../utils/route-input.util.js';
 
 const router = express.Router();
 
@@ -15,9 +21,18 @@ router.get('/events/:eventId/polls', async (req, res) => {
     try {
         const { eventId } = req.params;
 
+        const event = await prisma.event.findFirst({
+            where: { id: eventId, published: true },
+            select: { id: true }
+        });
+
+        if (!event) {
+            return res.status(404).json({ error: 'Event not found' });
+        }
+
         const polls = await prisma.poll.findMany({
             where: {
-                eventId,
+                eventId: event.id,
                 isActive: true,
                 OR: [
                     { endsAt: null },
@@ -50,6 +65,9 @@ router.get('/polls/:pollId/results', async (req, res) => {
         const poll = await prisma.poll.findUnique({
             where: { id: pollId },
             include: {
+                event: {
+                    select: { published: true }
+                },
                 options: {
                     orderBy: { order: 'asc' },
                     include: {
@@ -59,7 +77,7 @@ router.get('/polls/:pollId/results', async (req, res) => {
             }
         });
 
-        if (!poll) {
+        if (!poll || !poll.event.published) {
             return res.status(404).json({ error: 'Poll not found' });
         }
 
@@ -87,8 +105,16 @@ router.get('/polls/:pollId/results', async (req, res) => {
 // Vote on a poll (public - requires email)
 router.post('/polls/:pollId/vote',
     [
-        body('optionId').notEmpty(),
-        body('voterEmail').isEmail()
+        body('optionId').optional().trim().notEmpty(),
+        body('optionIds').optional().isArray({ min: 1 }),
+        body('optionIds.*').optional().trim().notEmpty(),
+        body().custom((value) => {
+            if (value.optionId || (Array.isArray(value.optionIds) && value.optionIds.length > 0)) {
+                return true;
+            }
+            throw new Error('Select at least one option');
+        }),
+        body('voterEmail').trim().isEmail().normalizeEmail()
     ],
     async (req, res) => {
         try {
@@ -98,61 +124,22 @@ router.post('/polls/:pollId/vote',
             }
 
             const { pollId } = req.params;
-            const { optionId, voterEmail } = req.body;
+            const { optionId, optionIds } = req.body;
+            const voterEmail = String(req.body.voterEmail || '').trim().toLowerCase();
 
-            // Verify poll exists and is active
-            const poll = await prisma.poll.findUnique({
-                where: { id: pollId },
-                include: { options: true }
+            const vote = await recordPollVote({
+                pollId,
+                optionId,
+                optionIds,
+                voterEmail
             });
 
-            if (!poll) {
-                return res.status(404).json({ error: 'Poll not found' });
-            }
-
-            if (!poll.isActive) {
-                return res.status(400).json({ error: 'Poll is closed' });
-            }
-
-            if (poll.endsAt && new Date(poll.endsAt) < new Date()) {
-                return res.status(400).json({ error: 'Poll has ended' });
-            }
-
-            // Verify option belongs to this poll
-            const option = poll.options.find(o => o.id === optionId);
-            if (!option) {
-                return res.status(400).json({ error: 'Invalid option' });
-            }
-
-            // Check if already voted (for any option in this poll)
-            if (!poll.allowMultiple) {
-                const existingVote = await prisma.pollVote.findFirst({
-                    where: {
-                        voterEmail,
-                        option: { pollId }
-                    }
-                });
-
-                if (existingVote) {
-                    return res.status(400).json({ error: 'You have already voted on this poll' });
-                }
-            }
-
-            // Create vote
-            await prisma.pollVote.create({
-                data: {
-                    optionId,
-                    voterEmail
-                }
-            });
-
-            res.json({ success: true, message: 'Vote recorded' });
+            res.json({ success: true, message: 'Vote recorded', createdCount: vote.createdCount });
         } catch (error) {
             console.error('Vote error:', error);
-            if (error.code === 'P2002') {
-                return res.status(400).json({ error: 'You have already voted for this option' });
-            }
-            res.status(500).json({ error: 'Failed to record vote' });
+            res.status(error.statusCode || 500).json({
+                error: error.statusCode ? error.message : 'Failed to record vote'
+            });
         }
     }
 );
@@ -200,9 +187,9 @@ router.get('/admin/events/:eventId/polls', async (req, res) => {
 // Create a poll (admin)
 router.post('/admin/events/:eventId/polls',
     [
-        body('question').notEmpty().trim(),
+        body('question').trim().notEmpty(),
         body('options').isArray({ min: 2 }).withMessage('At least 2 options required'),
-        body('options.*.text').notEmpty()
+        body('options.*.text').trim().notEmpty()
     ],
     async (req, res) => {
         try {
@@ -213,6 +200,9 @@ router.post('/admin/events/:eventId/polls',
 
             const { eventId } = req.params;
             const { question, description, options, allowMultiple, endsAt, notifyUsers } = req.body;
+            const parsedAllowMultiple = parseOptionalBooleanInput(allowMultiple, 'allowMultiple', false);
+            const parsedNotifyUsers = parseOptionalBooleanInput(notifyUsers, 'notifyUsers', false);
+            const parsedEndsAt = parseNullableDateInput(endsAt, 'endsAt');
 
             // Verify ownership
             const event = await prisma.event.findUnique({
@@ -230,8 +220,8 @@ router.post('/admin/events/:eventId/polls',
                     eventId,
                     question,
                     description,
-                    allowMultiple: allowMultiple || false,
-                    endsAt: endsAt ? new Date(endsAt) : null,
+                    allowMultiple: parsedAllowMultiple,
+                    endsAt: parsedEndsAt,
                     options: {
                         create: options.map((opt, idx) => ({
                             text: opt.text,
@@ -243,7 +233,7 @@ router.post('/admin/events/:eventId/polls',
             });
 
             // Send notification to attendees if requested
-            if (notifyUsers && event.registrations.length > 0) {
+            if (parsedNotifyUsers && event.registrations.length > 0) {
                 const emails = [...new Set(event.registrations.map(r => r.userEmail))];
 
                 // Record notification
@@ -260,6 +250,10 @@ router.post('/admin/events/:eventId/polls',
 
                 // Send emails in background
                 setImmediate(async () => {
+                    const eventUrl = `${process.env.FRONTEND_URL || 'https://occasio.vercel.app'}/events/${encodeURIComponent(eventId)}`;
+                    const descriptionBlock = description ? `<p>${description}</p>` : '';
+                    const optionItems = options.map(o => `<li>${o.text}</li>`).join('');
+
                     for (const email of emails) {
                         try {
                             await sendCustomEmail(
@@ -267,10 +261,10 @@ router.post('/admin/events/:eventId/polls',
                                 `New Poll for ${event.title}`,
                                 `<h2>New Poll Created</h2>
                 <p><strong>${question}</strong></p>
-                ${description ? `<p>${description}</p>` : ''}
-                <p>Cast your vote at: ${process.env.FRONTEND_URL || 'https://occasio.vercel.app'}/events/${eventId}</p>
+                ${descriptionBlock}
+                <p>Cast your vote at: ${eventUrl}</p>
                 <p>Options:</p>
-                <ul>${options.map(o => `<li>${o.text}</li>`).join('')}</ul>`
+                <ul>${optionItems}</ul>`
                             );
                         } catch (e) {
                             console.error('Failed to send poll notification to', email);
@@ -282,7 +276,9 @@ router.post('/admin/events/:eventId/polls',
             res.status(201).json(poll);
         } catch (error) {
             console.error('Create poll error:', error);
-            res.status(500).json({ error: 'Failed to create poll' });
+            res.status(error.statusCode || 500).json({
+                error: error.statusCode ? error.message : 'Failed to create poll'
+            });
         }
     }
 );
@@ -292,6 +288,7 @@ router.put('/admin/polls/:pollId', async (req, res) => {
     try {
         const { pollId } = req.params;
         const { question, description, isActive, endsAt } = req.body;
+        const hasField = (fieldName) => Object.prototype.hasOwnProperty.call(req.body, fieldName);
 
         const poll = await prisma.poll.findUnique({
             where: { id: pollId },
@@ -308,15 +305,17 @@ router.put('/admin/polls/:pollId', async (req, res) => {
             data: {
                 question: question || undefined,
                 description: description !== undefined ? description : undefined,
-                isActive: isActive !== undefined ? isActive : undefined,
-                endsAt: endsAt !== undefined ? (endsAt ? new Date(endsAt) : null) : undefined
+                isActive: hasField('isActive') ? parseBooleanInput(isActive, 'isActive') : undefined,
+                endsAt: hasField('endsAt') ? parseNullableDateInput(endsAt, 'endsAt') : undefined
             }
         });
 
         res.json(updated);
     } catch (error) {
         console.error('Update poll error:', error);
-        res.status(500).json({ error: 'Failed to update poll' });
+        res.status(error.statusCode || 500).json({
+            error: error.statusCode ? error.message : 'Failed to update poll'
+        });
     }
 });
 

@@ -1,12 +1,9 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import QRCode from 'qrcode';
 import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { downloadCloudinaryBuffer } from '../utils/cloudinary.util.js';
 import { getR2ObjectBuffer, isR2TemplateRef } from '../utils/r2.util.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { resolveLocalUploadPath } from '../utils/local-upload-path.util.js';
 
 // Certificate types
 export const CERTIFICATE_TYPES = {
@@ -42,32 +39,22 @@ async function fetchTemplateBytes(templateUrl) {
 
   // Handle private R2 object refs (r2://bucket/key)
   if (isR2TemplateRef(templateUrl)) {
-    return getR2ObjectBuffer(templateUrl);
+    return getR2ObjectBuffer(templateUrl, { allowedPrefixes: ['certificates/templates/'] });
   }
 
-  // Handle HTTP/HTTPS URL (using native fetch, Node 18+)
+  // Handle HTTP/HTTPS URL. Only server-owned Cloudinary templates are allowed.
   if (templateUrl.startsWith('http://') || templateUrl.startsWith('https://')) {
-    // For Cloudinary URLs, use the dedicated download helper (bypasses CDN auth)
     if (templateUrl.includes('cloudinary.com')) {
       const buffer = await downloadCloudinaryBuffer(templateUrl);
       if (buffer) return buffer;
       throw new Error('Failed to download template from Cloudinary');
     }
 
-    const response = await fetch(templateUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch template: ${response.status} ${response.statusText}`);
-    }
-    return Buffer.from(await response.arrayBuffer());
+    throw new Error('Remote certificate templates must be uploaded through Occasio storage');
   }
 
   // Handle local file path (e.g., /uploads/file-xxx.pdf)
-  let localPath = templateUrl;
-  if (localPath.startsWith('/uploads/')) {
-    localPath = path.join(__dirname, '../../', localPath);
-  } else if (!path.isAbsolute(localPath)) {
-    localPath = path.join(__dirname, '../../uploads/', localPath);
-  }
+  const localPath = resolveLocalUploadPath(templateUrl, { allowedExtensions: ['.pdf'] });
 
   if (!fs.existsSync(localPath)) {
     throw new Error(`Template file not found at: ${localPath}`);
@@ -151,6 +138,23 @@ function parseColor(hexColor) {
   return rgb(r, g, b);
 }
 
+const STANDARD_FONT_BY_NAME = {
+  Helvetica: StandardFonts.Helvetica,
+  'Times-Roman': StandardFonts.TimesRoman,
+  Courier: StandardFonts.Courier,
+};
+
+const STANDARD_BOLD_FONT_BY_NAME = {
+  Helvetica: StandardFonts.HelveticaBold,
+  'Times-Roman': StandardFonts.TimesRomanBold,
+  Courier: StandardFonts.CourierBold,
+};
+
+const getFontName = (font = 'Helvetica', bold = false) => {
+  const source = bold ? STANDARD_BOLD_FONT_BY_NAME : STANDARD_FONT_BY_NAME;
+  return source[font] || source.Helvetica;
+};
+
 /**
  * Generates a certificate PDF from a template and field mappings
  * @param {string} templateUrl - URL, data URL, or local path to PDF template
@@ -165,20 +169,44 @@ export const generateCertificate = async (templateUrl, mapping, data) => {
 
     // 2. Load PDF
     const pdfDoc = await PDFDocument.load(existingPdfBytes);
-    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const embeddedFonts = new Map();
+    const getEmbeddedFont = async (fontName, bold) => {
+      const standardFontName = getFontName(fontName, bold);
+      if (!embeddedFonts.has(standardFontName)) {
+        embeddedFonts.set(standardFontName, await pdfDoc.embedFont(standardFontName));
+      }
+      return embeddedFonts.get(standardFontName);
+    };
     const pages = pdfDoc.getPages();
     const firstPage = pages[0];
     const { width, height } = firstPage.getSize();
 
     // 3. Draw fields
     for (const field of normalizeCertificateMapping(mapping)) {
-      const { fieldId, x, y, fontSize = 12, color = '#000000', bold = false } = field;
+      const { fieldId, x, y, fontSize = 12, color = '#000000', bold = false, font: fontName = 'Helvetica' } = field;
 
       const text = resolveFieldValue(fieldId, data);
       if (!text) continue;
 
-      const selectedFont = bold ? boldFont : font;
+      if (fieldId === 'qrCode') {
+        const qrBuffer = await QRCode.toBuffer(text, {
+          margin: 0,
+          width: 256,
+          errorCorrectionLevel: 'M',
+        });
+        const qrImage = await pdfDoc.embedPng(qrBuffer);
+        const size = Math.max(fontSize * 4, 48);
+
+        firstPage.drawImage(qrImage, {
+          x: (x * width) - (size / 2),
+          y: ((1 - y) * height) - (size / 2),
+          width: size,
+          height: size,
+        });
+        continue;
+      }
+
+      const selectedFont = await getEmbeddedFont(fontName, bold);
       const textWidth = selectedFont.widthOfTextAtSize(text, fontSize);
 
       firstPage.drawText(text, {

@@ -30,7 +30,7 @@ Frontend application for Event Management and Booking System built with React an
 
 ### Prerequisites
 
-- Node.js (v18 or higher)
+- Node.js (v22.12 or higher)
 - Backend API running
 
 ### Installation
@@ -118,24 +118,13 @@ The built files will be in the `dist/` directory.
 
 ## Deployment
 
-The frontend can be deployed to:
-- Vercel
-- Netlify
-- AWS S3 + CloudFront
-- Any static hosting service
+The frontend is configured for Vercel. Other static hosts need equivalent SPA routing and `VITE_API_URL` pointing to the Azure backend.
 
 ### Vercel Deployment
 
 ```bash
 npm install -g vercel
 vercel
-```
-
-### Netlify Deployment
-
-```bash
-npm install -g netlify-cli
-netlify deploy --prod
 ```
 
 ## Browser Support

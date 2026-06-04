@@ -16,10 +16,10 @@ model User {
   passwordHash String   @map("password_hash")
   role         UserRole @default(ORGANIZER)
   createdAt    DateTime @default(now()) @map("created_at")
-  
-  events       Event[]
-  reviews      Review[]
-  
+
+  events  Event[]
+  reviews Review[]
+
   @@map("users")
 }
 
@@ -55,7 +55,7 @@ model Event {
   location    String
   startTime   DateTime      @map("start_time")
   endTime     DateTime      @map("end_time")
-  capacity    Int       
+  capacity    Int
   priceCents  Int           @default(0) @map("price_cents")
   currency    String        @default("INR")
   type        EventType     @default(TICKETED)
@@ -63,32 +63,32 @@ model Event {
   tags        String[]      @default([])
   posterUrl   String?       @map("poster_url")
   published   Boolean       @default(false)
-  
+
   // Ticket styling options (JSON: template, primaryColor, accentColor, logoUrl)
-  ticketStyle Json?         @map("ticket_style")
+  ticketStyle Json? @map("ticket_style")
 
   // Certificate styling
-  certificateEnabled      Boolean   @default(false) @map("certificate_enabled")
-  certificateTemplateUrl  String?   @map("certificate_template_url")
-  certificateMapping      Json?     @map("certificate_mapping")
+  certificateEnabled     Boolean @default(false) @map("certificate_enabled")
+  certificateTemplateUrl String? @map("certificate_template_url")
+  certificateMapping     Json?   @map("certificate_mapping")
   // Multi-type certificate configs: { participation: {templateUrl, mapping, enabled}, first_prize: {...}, second_prize: {...}, third_prize: {...} }
-  certificateConfigs      Json?     @map("certificate_configs")
-  
-  createdAt   DateTime      @default(now()) @map("created_at")
-  updatedAt   DateTime      @updatedAt @map("updated_at")
-  
-  organizer      User            @relation(fields: [organizerId], references: [id], onDelete: Cascade)
-  form           Form?
-  registrations  Registration[]
-  waitlist       Waitlist[]
-  discounts      DiscountCode[]
-  reviews        Review[]
-  polls          Poll[]
-  teamMembers    TeamMember[]
-  ticketTiers    TicketTier[]
-  speakers       Speaker[]
-  reminders      EventReminder[]
-  
+  certificateConfigs     Json?   @map("certificate_configs")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  organizer     User            @relation(fields: [organizerId], references: [id], onDelete: Cascade)
+  form          Form?
+  registrations Registration[]
+  waitlist      Waitlist[]
+  discounts     DiscountCode[]
+  reviews       Review[]
+  polls         Poll[]
+  teamMembers   TeamMember[]
+  ticketTiers   TicketTier[]
+  speakers      Speaker[]
+  reminders     EventReminder[]
+
   @@map("events")
 }
 
@@ -97,9 +97,9 @@ model Form {
   eventId    String   @unique @map("event_id")
   schemaJson Json     @map("schema_json")
   createdAt  DateTime @default(now()) @map("created_at")
-  
+
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  
+
   @@map("forms")
 }
 
@@ -110,10 +110,10 @@ model Registration {
   formResponse Json               @map("form_response")
   status       RegistrationStatus @default(PENDING)
   createdAt    DateTime           @default(now()) @map("created_at")
-  
+
   event  Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
   orders Order[]
-  
+
   @@map("registrations")
 }
 
@@ -125,23 +125,24 @@ enum RegistrationStatus {
 }
 
 model Order {
-  id              String       @id @default(uuid())
-  registrationId  String       @map("registration_id")
-  amountCents     Int          @map("amount_cents")
-  currency        String       @default("INR")
+  id              String          @id @default(uuid())
+  registrationId  String          @map("registration_id")
+  amountCents     Int             @map("amount_cents")
+  currency        String          @default("INR")
   provider        PaymentProvider
-  providerOrderId String?      @map("provider_order_id")
-  status          OrderStatus  @default(CREATED)
-  paymentData     Json?        @map("payment_data")
-  createdAt       DateTime     @default(now()) @map("created_at")
-  updatedAt       DateTime     @updatedAt @map("updated_at")
-  
+  providerOrderId String?         @map("provider_order_id")
+  status          OrderStatus     @default(CREATED)
+  paymentData     Json?           @map("payment_data")
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
+
   registration Registration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
   ticket       Ticket?
-  
+
   discountCodeId String?       @map("discount_code_id")
   discountCode   DiscountCode? @relation(fields: [discountCodeId], references: [id])
-  
+
+  @@unique([provider, providerOrderId])
   @@map("orders")
 }
 
@@ -165,15 +166,15 @@ model Ticket {
   issuedAt     DateTime  @default(now()) @map("issued_at")
   revoked      Boolean   @default(false)
   validUntil   DateTime? @map("valid_until")
-  
+
   // Check-in/out tracking
-  scannedAt    DateTime? @map("scanned_at")        // Legacy: first scan time
-  checkedInAt  DateTime? @map("checked_in_at")     // Check-in timestamp
-  checkedOutAt DateTime? @map("checked_out_at")    // Check-out timestamp  
-  checkedInBy  String?   @map("checked_in_by")     // User ID who checked in
-  
+  scannedAt    DateTime? @map("scanned_at") // Legacy: first scan time
+  checkedInAt  DateTime? @map("checked_in_at") // Check-in timestamp
+  checkedOutAt DateTime? @map("checked_out_at") // Check-out timestamp
+  checkedInBy  String?   @map("checked_in_by") // User ID who checked in
+
   order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  
+
   @@map("tickets")
 }
 
@@ -185,27 +186,27 @@ model Waitlist {
   phone     String?
   createdAt DateTime @default(now()) @map("created_at")
 
-  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
-  @@map("waitlists")
   @@index([eventId, email])
+  @@map("waitlists")
 }
 
 model DiscountCode {
-  id          String       @id @default(uuid())
-  eventId     String       @map("event_id")
-  code        String
-  type        DiscountType @default(PERCENTAGE)
-  amount      Int          // Percentage (e.g. 10 for 10%) or Amount in cents
-  maxUses     Int?         @map("max_uses")
-  usedCount   Int          @default(0) @map("used_count")
-  validFrom   DateTime?    @map("valid_from")
-  validUntil  DateTime?    @map("valid_until")
-  isActive    Boolean      @default(true) @map("is_active")
-  createdAt   DateTime     @default(now()) @map("created_at")
+  id         String       @id @default(uuid())
+  eventId    String       @map("event_id")
+  code       String
+  type       DiscountType @default(PERCENTAGE)
+  amount     Int // Percentage (e.g. 10 for 10%) or Amount in cents
+  maxUses    Int?         @map("max_uses")
+  usedCount  Int          @default(0) @map("used_count")
+  validFrom  DateTime?    @map("valid_from")
+  validUntil DateTime?    @map("valid_until")
+  isActive   Boolean      @default(true) @map("is_active")
+  createdAt  DateTime     @default(now()) @map("created_at")
 
-  event       Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  orders      Order[]
+  event  Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  orders Order[]
 
   @@unique([eventId, code])
   @@map("discount_codes")
@@ -217,15 +218,15 @@ enum DiscountType {
 }
 
 model Review {
-  id          String   @id @default(uuid())
-  eventId     String   @map("event_id")
-  userId      String   @map("user_id")
-  rating      Int      // 1-5
-  comment     String?  @db.Text
-  createdAt   DateTime @default(now()) @map("created_at")
+  id        String   @id @default(uuid())
+  eventId   String   @map("event_id")
+  userId    String   @map("user_id")
+  rating    Int // 1-5
+  comment   String?  @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
 
-  event       Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([eventId, userId]) // One review per user per event
   @@map("reviews")
@@ -236,41 +237,41 @@ model Review {
 // ============================================
 
 model Poll {
-  id          String       @id @default(uuid())
-  eventId     String       @map("event_id")
-  question    String
-  description String?      @db.Text
-  isActive    Boolean      @default(true) @map("is_active")
-  allowMultiple Boolean    @default(false) @map("allow_multiple")
-  endsAt      DateTime?    @map("ends_at")
-  createdAt   DateTime     @default(now()) @map("created_at")
-  
-  event       Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  options     PollOption[]
-  
+  id            String    @id @default(uuid())
+  eventId       String    @map("event_id")
+  question      String
+  description   String?   @db.Text
+  isActive      Boolean   @default(true) @map("is_active")
+  allowMultiple Boolean   @default(false) @map("allow_multiple")
+  endsAt        DateTime? @map("ends_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  event   Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  options PollOption[]
+
   @@map("polls")
 }
 
 model PollOption {
-  id        String     @id @default(uuid())
-  pollId    String     @map("poll_id")
-  text      String
-  order     Int        @default(0)
-  
-  poll      Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
-  votes     PollVote[]
-  
+  id     String @id @default(uuid())
+  pollId String @map("poll_id")
+  text   String
+  order  Int    @default(0)
+
+  poll  Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  votes PollVote[]
+
   @@map("poll_options")
 }
 
 model PollVote {
-  id           String      @id @default(uuid())
-  optionId     String      @map("option_id")
-  voterEmail   String      @map("voter_email")
-  createdAt    DateTime    @default(now()) @map("created_at")
-  
-  option       PollOption  @relation(fields: [optionId], references: [id], onDelete: Cascade)
-  
+  id         String   @id @default(uuid())
+  optionId   String   @map("option_id")
+  voterEmail String   @map("voter_email")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  option PollOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+
   @@unique([optionId, voterEmail]) // One vote per option per email
   @@map("poll_votes")
 }
@@ -280,15 +281,15 @@ model PollVote {
 // ============================================
 
 model Notification {
-  id          String   @id @default(uuid())
-  eventId     String?  @map("event_id")
-  type        String   // poll_created, event_reminder, waitlist_available
-  title       String
-  message     String   @db.Text
-  recipientEmails String[] @map("recipient_emails")
-  sentAt      DateTime? @map("sent_at")
-  createdAt   DateTime @default(now()) @map("created_at")
-  
+  id              String    @id @default(uuid())
+  eventId         String?   @map("event_id")
+  type            String // poll_created, event_reminder, waitlist_available
+  title           String
+  message         String    @db.Text
+  recipientEmails String[]  @map("recipient_emails")
+  sentAt          DateTime? @map("sent_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
   @@map("notifications")
 }
 
@@ -297,25 +298,25 @@ model Notification {
 // ============================================
 
 model TeamMember {
-  id          String   @id @default(uuid())
-  eventId     String   @map("event_id")
-  email       String
-  name        String?
-  role        TeamRole @default(STAFF)
-  invitedAt   DateTime @default(now()) @map("invited_at")
-  acceptedAt  DateTime? @map("accepted_at")
-  
-  event       Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  
+  id         String    @id @default(uuid())
+  eventId    String    @map("event_id")
+  email      String
+  name       String?
+  role       TeamRole  @default(STAFF)
+  invitedAt  DateTime  @default(now()) @map("invited_at")
+  acceptedAt DateTime? @map("accepted_at")
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
   @@unique([eventId, email])
   @@map("team_members")
 }
 
 enum TeamRole {
   SUPER_MANAGER // Full access including forms, financials
-  MANAGER       // Edit event + check-in + analytics
-  SCANNER       // Check-in only
-  STAFF         // View only
+  MANAGER // Edit event + check-in + analytics
+  SCANNER // Check-in only
+  STAFF // View only
 }
 
 // ============================================
@@ -323,12 +324,12 @@ enum TeamRole {
 // ============================================
 
 model PushSubscription {
-  id           String   @id @default(uuid())
-  endpoint     String   @unique
-  keys         Json
-  userEmail    String?  @map("user_email")
-  createdAt    DateTime @default(now()) @map("created_at")
-  
+  id        String   @id @default(uuid())
+  endpoint  String   @unique
+  keys      Json
+  userEmail String?  @map("user_email")
+  createdAt DateTime @default(now()) @map("created_at")
+
   @@map("push_subscriptions")
 }
 
@@ -339,17 +340,17 @@ model PushSubscription {
 model TicketTier {
   id          String   @id @default(uuid())
   eventId     String   @map("event_id")
-  name        String   // "VIP", "Standard", "Early Bird"
+  name        String // "VIP", "Standard", "Early Bird"
   description String?  @db.Text
   priceCents  Int      @map("price_cents")
-  capacity    Int?     // null = unlimited
+  capacity    Int? // null = unlimited
   soldCount   Int      @default(0) @map("sold_count")
   sortOrder   Int      @default(0) @map("sort_order")
   isActive    Boolean  @default(true) @map("is_active")
   createdAt   DateTime @default(now()) @map("created_at")
-  
-  event       Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
   @@map("ticket_tiers")
 }
 
@@ -358,19 +359,19 @@ model TicketTier {
 // ============================================
 
 model Speaker {
-  id          String   @id @default(uuid())
-  eventId     String   @map("event_id")
-  name        String
-  title       String?  // "CEO at Company"
-  bio         String?  @db.Text
-  photoUrl    String?  @map("photo_url")
-  linkedIn    String?  @map("linkedin")
-  twitter     String?
-  sortOrder   Int      @default(0) @map("sort_order")
-  createdAt   DateTime @default(now()) @map("created_at")
-  
-  event       Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  
+  id        String   @id @default(uuid())
+  eventId   String   @map("event_id")
+  name      String
+  title     String? // "CEO at Company"
+  bio       String?  @db.Text
+  photoUrl  String?  @map("photo_url")
+  linkedIn  String?  @map("linkedin")
+  twitter   String?
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
   @@map("speakers")
 }
 
@@ -387,8 +388,8 @@ model EventReminder {
   sentAt           DateTime? @map("sent_at")
   isActive         Boolean   @default(true) @map("is_active")
   createdAt        DateTime  @default(now()) @map("created_at")
-  
-  event            Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
   @@map("event_reminders")
 }

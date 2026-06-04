@@ -43,16 +43,16 @@ export default function RegisterPage() {
 
   return (
     <main className="auth-shell flex min-h-screen items-center justify-center px-4 py-10 text-[#f7efe3]">
-      <div className="grid w-full max-w-5xl overflow-hidden rounded-[2.25rem] border border-white/10 bg-black/20 shadow-[0_28px_110px_rgba(0,0,0,0.42)] backdrop-blur-2xl lg:grid-cols-[1.05fr_0.95fr]">
+      <div className="grid w-full max-w-5xl overflow-hidden rounded-[2rem] border border-white/10 bg-black/20 shadow-[0_28px_110px_rgba(0,0,0,0.42)] backdrop-blur-2xl sm:rounded-[2.25rem] lg:grid-cols-[1.05fr_0.95fr]">
         <section className="p-5 sm:p-8 lg:p-10">
-          <div className="mb-8 flex items-center justify-between">
-            <Link to="/" className="flex items-center gap-3 text-lg font-black lg:hidden">
+          <div className="mb-8 flex min-w-0 flex-wrap items-center justify-between gap-3">
+            <Link to="/" className="flex min-w-0 items-center gap-3 text-lg font-black lg:hidden">
               <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#E23744] text-white">
                 <Ticket size={17} fill="currentColor" className="-rotate-12" />
               </span>
-              Occasio
+              <span className="truncate">Occasio</span>
             </Link>
-            <Link to="/" className="ml-auto rounded-full border border-white/10 px-4 py-2 text-xs font-bold uppercase tracking-[0.2em] text-[#aaa096] transition-colors hover:border-[#E23744]/50 hover:text-white">
+            <Link to="/" className="ml-auto shrink-0 rounded-full border border-white/10 px-3 py-2 text-[11px] font-bold uppercase tracking-[0.12em] text-[#aaa096] transition-colors hover:border-[#E23744]/50 hover:text-white sm:px-4 sm:text-xs sm:tracking-[0.2em]">
               Back to events
             </Link>
           </div>
@@ -71,6 +71,7 @@ export default function RegisterPage() {
                     id="name"
                     type="text"
                     name="name"
+                    autoComplete="name"
                     required
                     className="auth-input pl-11"
                     placeholder="Ayush Kumar"
@@ -88,6 +89,9 @@ export default function RegisterPage() {
                     id="email"
                     type="email"
                     name="email"
+                    autoComplete="email"
+                    inputMode="email"
+                    spellCheck={false}
                     required
                     className="auth-input pl-11"
                     placeholder="you@example.com"
@@ -105,6 +109,7 @@ export default function RegisterPage() {
                     id="password"
                     type="password"
                     name="password"
+                    autoComplete="new-password"
                     required
                     minLength={6}
                     className="auth-input pl-11"
@@ -123,6 +128,7 @@ export default function RegisterPage() {
                     id="confirmPassword"
                     type="password"
                     name="confirmPassword"
+                    autoComplete="new-password"
                     required
                     minLength={6}
                     className="auth-input pl-11"

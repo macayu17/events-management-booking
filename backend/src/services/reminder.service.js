@@ -6,7 +6,7 @@
  */
 
 import prisma from '../config/db.js';
-import { sendCustomEmail } from './email.service.js';
+import { sendTextEmail } from './email.service.js';
 
 /**
  * Process all pending reminders
@@ -60,16 +60,18 @@ export async function processReminders() {
                         const registration = event.registrations.find(r => r.userEmail === email);
                         const attendeeName = registration?.formResponse?.name || 'Attendee';
 
-                        // Personalize the message
-                        const personalizedMessage = reminder.message
+                        const personalize = (template) => String(template || '')
                             .replace(/\{name\}/g, attendeeName)
                             .replace(/\{event\}/g, event.title)
                             .replace(/\{date\}/g, eventTime.toLocaleDateString())
                             .replace(/\{time\}/g, eventTime.toLocaleTimeString())
                             .replace(/\{location\}/g, event.location);
 
+                        const personalizedSubject = personalize(reminder.subject);
+                        const personalizedMessage = personalize(reminder.message);
+
                         try {
-                            await sendCustomEmail(email, reminder.subject, personalizedMessage);
+                            await sendTextEmail(email, personalizedSubject, personalizedMessage);
                             sentCount++;
                         } catch (emailError) {
                             console.error(`Failed to send reminder to ${email}:`, emailError);

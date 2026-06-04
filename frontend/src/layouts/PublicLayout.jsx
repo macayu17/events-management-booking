@@ -1,10 +1,12 @@
-import { Outlet, Link } from 'react-router-dom';
+import { Outlet, Link, useLocation } from 'react-router-dom';
 import { Menu, X, Ticket } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 export default function PublicLayout() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const currentYear = new Date().getFullYear();
+  const location = useLocation();
+  const isActive = (path) => location.pathname === path;
 
   useEffect(() => {
     const handleEscape = (event) => {
@@ -49,10 +51,18 @@ export default function PublicLayout() {
 
             {/* Desktop Navigation */}
             <div className="hidden md:flex items-center gap-8">
-              <Link to="/" className="text-sm font-medium text-gray-300 hover:text-white transition-colors">
+              <Link
+                to="/"
+                aria-current={isActive('/') ? 'page' : undefined}
+                className={`text-sm font-medium transition-colors ${isActive('/') ? 'text-white' : 'text-gray-300 hover:text-white'}`}
+              >
                 Explore
               </Link>
-              <Link to="/login" className="text-sm font-medium text-gray-300 hover:text-white transition-colors">
+              <Link
+                to="/login"
+                aria-current={isActive('/login') ? 'page' : undefined}
+                className={`text-sm font-medium transition-colors ${isActive('/login') ? 'text-white' : 'text-gray-300 hover:text-white'}`}
+              >
                 Organizer Login
               </Link>
               <Link
@@ -83,14 +93,16 @@ export default function PublicLayout() {
             <div className="px-4 pt-4 pb-6 space-y-3">
               <Link
                 to="/"
-                className="block px-4 py-3 text-base font-medium text-gray-300 hover:bg-white/5 hover:text-white rounded-xl"
+                aria-current={isActive('/') ? 'page' : undefined}
+                className={`block rounded-xl px-4 py-3 text-base font-medium ${isActive('/') ? 'bg-white/10 text-white' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}
                 onClick={() => setMobileMenuOpen(false)}
               >
                 Explore Events
               </Link>
               <Link
                 to="/login"
-                className="block px-4 py-3 text-base font-medium text-gray-300 hover:bg-white/5 hover:text-white rounded-xl"
+                aria-current={isActive('/login') ? 'page' : undefined}
+                className={`block rounded-xl px-4 py-3 text-base font-medium ${isActive('/login') ? 'bg-white/10 text-white' : 'text-gray-300 hover:bg-white/5 hover:text-white'}`}
                 onClick={() => setMobileMenuOpen(false)}
               >
                 Organizer Login
@@ -108,12 +120,12 @@ export default function PublicLayout() {
       </nav>
 
       {/* Main Content */}
-      <main id="main-content" className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main id="main-content" className="relative z-10 flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <Outlet />
       </main>
 
       {/* Modern Minimal Footer */}
-      <footer className="border-t border-white/5 bg-[#09090b] mt-12">
+      <footer className="relative z-10 border-t border-white/5 bg-[#09090b] mt-12">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
           <div className="flex flex-col md:flex-row justify-between items-center gap-6">
             <div className="flex items-center gap-3">

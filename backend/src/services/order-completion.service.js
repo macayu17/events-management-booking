@@ -1,7 +1,13 @@
 import { Prisma } from '@prisma/client';
 import prisma from '../config/db.js';
 import { enqueueTicketGeneration } from './queue.service.js';
-import { getTicketTierIdFromPaymentData, mergePaymentData } from '../utils/payment-metadata.util.js';
+import {
+  getCheckoutReservation,
+  getTicketTierIdFromPaymentData,
+  markCheckoutReservationConsumed,
+  mergePaymentData
+} from '../utils/payment-metadata.util.js';
+import { isDiscountUsable } from '../utils/registration-pricing.util.js';
 
 export { getTicketTierIdFromPaymentData, mergePaymentData };
 
@@ -30,10 +36,16 @@ export async function completePaidOrder(orderId, paymentData = {}, options = {})
       throw withStatus('Order not found', 404);
     }
 
-    const alreadyPaid = order.status === 'PAID';
-    const mergedPaymentData = mergePaymentData(order.paymentData, paymentData);
+    if (order.status === 'FAILED') {
+      throw withStatus('Order payment session expired', 409);
+    }
 
-    if (!alreadyPaid) {
+    const alreadyPaid = order.status === 'PAID';
+    let mergedPaymentData = mergePaymentData(order.paymentData, paymentData);
+    const checkoutReservation = getCheckoutReservation(mergedPaymentData);
+    const hasCheckoutReservation = checkoutReservation.status === 'ACTIVE';
+
+    if (!alreadyPaid && !hasCheckoutReservation) {
       const event = order.registration.event;
 
       if (event.capacity > 0) {
@@ -81,11 +93,58 @@ export async function completePaidOrder(orderId, paymentData = {}, options = {})
       }
 
       if (order.discountCodeId) {
-        await tx.discountCode.update({
+        const discount = await tx.discountCode.findUnique({
           where: { id: order.discountCodeId },
+        });
+
+        if (!isDiscountUsable(discount)) {
+          throw withStatus('Discount code is no longer available', 409);
+        }
+
+        const discountUpdate = await tx.discountCode.updateMany({
+          where: {
+            id: order.discountCodeId,
+            isActive: true,
+            ...(discount.maxUses ? { usedCount: { lt: discount.maxUses } } : {}),
+            ...(discount.validFrom ? { validFrom: { lte: new Date() } } : {}),
+            ...(discount.validUntil ? { validUntil: { gte: new Date() } } : {})
+          },
+          data: { usedCount: { increment: 1 } }
+        });
+
+        if (discountUpdate.count === 0) {
+          throw withStatus('Discount code is no longer available', 409);
+        }
+      }
+    }
+
+    if (!alreadyPaid && hasCheckoutReservation) {
+      const event = order.registration.event;
+      const ticketTierId = checkoutReservation.ticketTierId || getTicketTierIdFromPaymentData(mergedPaymentData);
+
+      if (ticketTierId) {
+        await tx.ticketTier.updateMany({
+          where: {
+            id: ticketTierId,
+            eventId: event.id,
+          },
+          data: {
+            soldCount: { increment: 1 }
+          }
+        });
+      }
+
+      if (checkoutReservation.discountCodeId || order.discountCodeId) {
+        const discountCodeId = checkoutReservation.discountCodeId || order.discountCodeId;
+        await tx.discountCode.updateMany({
+          where: {
+            id: discountCodeId,
+          },
           data: { usedCount: { increment: 1 } }
         });
       }
+
+      mergedPaymentData = markCheckoutReservationConsumed(mergedPaymentData);
     }
 
     const updatedOrder = await tx.order.update({

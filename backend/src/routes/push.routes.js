@@ -1,8 +1,28 @@
 import express from 'express';
 import webpush from 'web-push';
+import jwt from 'jsonwebtoken';
 import prisma from '../config/db.js';
 
 const router = express.Router();
+
+const optionalAuthenticate = async (req, res, next) => {
+    try {
+        const token = req.headers.authorization?.split(' ')[1];
+        if (!token) return next();
+
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const user = await prisma.user.findUnique({
+            where: { id: decoded.userId },
+            select: { id: true, email: true }
+        });
+
+        if (user) req.user = user;
+    } catch {
+        // Public subscriptions are allowed, but only authenticated requests can bind an email.
+    }
+
+    next();
+};
 
 // Configure web-push with VAPID keys
 // Generate keys with: npx web-push generate-vapid-keys
@@ -29,9 +49,10 @@ router.get('/vapid-key', (req, res) => {
 });
 
 // Subscribe to push notifications
-router.post('/subscribe', async (req, res) => {
+router.post('/subscribe', optionalAuthenticate, async (req, res) => {
     try {
-        const { subscription, userEmail } = req.body;
+        const { subscription } = req.body;
+        const userEmail = req.user?.email || null;
 
         if (!subscription || !subscription.endpoint) {
             return res.status(400).json({ error: 'Invalid subscription' });
@@ -42,12 +63,12 @@ router.post('/subscribe', async (req, res) => {
             where: { endpoint: subscription.endpoint },
             update: {
                 keys: subscription.keys,
-                userEmail: userEmail || null
+                userEmail
             },
             create: {
                 endpoint: subscription.endpoint,
                 keys: subscription.keys,
-                userEmail: userEmail || null
+                userEmail
             }
         });
 

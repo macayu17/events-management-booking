@@ -1,9 +1,30 @@
 import axios from 'axios';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const configuredApiUrl = import.meta.env.VITE_API_URL;
 
-// Get the backend base URL (without /api)
-const BACKEND_URL = API_URL.replace(/\/api$/, '');
+if (import.meta.env.PROD && !configuredApiUrl) {
+  throw new Error('VITE_API_URL must be configured for production builds');
+}
+
+const normalizeUrl = (url) => String(url || '').replace(/\/+$/, '');
+
+export const API_URL = normalizeUrl(configuredApiUrl || 'http://localhost:5000/api');
+export const BACKEND_URL = API_URL.replace(/\/api$/, '');
+
+export const buildApiUrl = (path) => `${API_URL}/${String(path || '').replace(/^\/+/, '')}`;
+
+const isProtectedRequest = (config = {}) => {
+  if (config.skipAuthRedirect) return false;
+
+  const url = String(config.url || '');
+  return [
+    '/admin',
+    '/discounts',
+    '/team',
+    '/tickets/verify',
+    '/push'
+  ].some(prefix => url.startsWith(prefix));
+};
 
 const api = axios.create({
   baseURL: API_URL,
@@ -12,7 +33,6 @@ const api = axios.create({
   },
 });
 
-// Add token to requests
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token');
   if (token) {
@@ -21,11 +41,10 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Handle response errors
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    if (error.response?.status === 401 && isProtectedRequest(error.config)) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
       window.location.href = '/login';
@@ -34,17 +53,13 @@ api.interceptors.response.use(
   }
 );
 
-// Helper to get full image URL for uploaded images
 export const getImageUrl = (url) => {
   if (!url) return null;
-  // If it's already a full URL (http/https), return as-is
   if (url.startsWith('http://') || url.startsWith('https://')) {
     return url;
   }
-  // In development, use relative path for Vite proxy
-  // In production, prepend backend URL
   if (import.meta.env.DEV) {
-    return url; // Let Vite proxy handle /uploads
+    return url;
   }
   return `${BACKEND_URL}${url}`;
 };
