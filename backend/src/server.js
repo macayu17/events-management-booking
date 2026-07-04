@@ -59,10 +59,22 @@ const parseAllowedOrigins = () => {
 };
 
 // Rate limiting
-const limiter = rateLimit({
+// General API limiter — covers browsing/reads, so it is intentionally roomy.
+const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  message: 'Too many requests from this IP, please try again later.'
+  max: 300, // per IP per window
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests from this IP, please try again later.' }
+});
+
+// Stricter limiter for authentication endpoints (login/register/brute-force surface).
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 30, // per IP per window
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many authentication attempts, please try again later.' }
 });
 
 // Middleware
@@ -72,7 +84,6 @@ if (trustProxy !== false) {
 }
 
 app.use(helmet());
-app.use(limiter);
 app.use(cors({
   origin: (origin, callback) => {
     const allowedOrigins = parseAllowedOrigins();
@@ -102,8 +113,15 @@ app.use(cors({
   credentials: true
 }));
 
-// Webhook routes need raw body
-app.use('/api/webhooks', express.raw({ type: 'application/json' }));
+// Webhook routes need the raw body for signature verification and must run
+// BEFORE the JSON parser and the rate limiter, so a payment provider's retries
+// are never dropped with a 429 (a dropped webhook means a paid order never
+// gets a ticket).
+app.use('/api/webhooks', express.raw({ type: 'application/json' }), webhookRoutes);
+
+// Rate limiting for the rest of the API (webhooks above are intentionally exempt).
+app.use('/api/auth', authLimiter);
+app.use('/api', apiLimiter);
 
 // Regular JSON parsing for other routes.
 app.use((req, res, next) => {
@@ -133,7 +151,6 @@ app.use('/api/events', eventRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api', registrationRoutes);
 app.use('/api', waitlistRoutes);
-app.use('/api/webhooks', webhookRoutes);
 app.use('/api/tickets', ticketRoutes);
 app.use('/api/discounts', discountRoutes);
 app.use('/api', reviewRoutes);

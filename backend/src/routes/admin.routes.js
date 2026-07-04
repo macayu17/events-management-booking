@@ -11,7 +11,7 @@ import { buildTeamInviteUrl, createTeamInviteToken } from '../utils/team-invite-
 import { mapCheckInFailure, mapCheckOutFailure, mapResetFailure, sendMappedFailure } from '../utils/checkin-response.util.js';
 import { validateCertificateTemplateRef } from '../utils/certificate-admin.util.js';
 import { buildAttendeeOrderWhere, mapRegistrationsToAttendees } from '../utils/admin-attendees.util.js';
-import { summarizeRegistrationStatuses } from '../utils/admin-analytics.util.js';
+import { parsePagination, buildPageResponse } from '../utils/pagination.util.js';
 import { isTicketExpired, markTicketCheckedIn, markTicketCheckedOut, resetTicketCheckIn } from '../services/checkin.service.js';
 
 const router = express.Router();
@@ -493,22 +493,44 @@ router.get('/events/:id/registrations', async (req, res) => {
       return res.status(403).json({ error: 'Not authorized' });
     }
 
-    const registrations = await prisma.registration.findMany({
-      where: { eventId: id },
-      include: {
-        orders: {
-          include: {
-            ticket: true
-          }
-        }
-      },
-      orderBy: { createdAt: 'desc' }
-    });
+    const pagination = parsePagination(req.query);
+    const where = { eventId: id };
 
-    res.json(registrations);
+    const [total, registrations, paidRegistrations, revenueAgg] = await Promise.all([
+      prisma.registration.count({ where }),
+      prisma.registration.findMany({
+        where,
+        include: {
+          orders: {
+            include: {
+              ticket: true
+            }
+          }
+        },
+        orderBy: { createdAt: 'desc' },
+        skip: pagination.skip,
+        take: pagination.take
+      }),
+      // Account-wide summary so the stat cards stay accurate under pagination.
+      prisma.registration.count({ where: { eventId: id, status: 'PAID' } }),
+      prisma.order.aggregate({
+        where: { status: 'PAID', registration: { eventId: id } },
+        _sum: { amountCents: true }
+      })
+    ]);
+
+    res.json({
+      ...buildPageResponse(registrations, total, pagination),
+      summary: {
+        paidRegistrations,
+        totalRevenueCents: revenueAgg._sum.amountCents || 0
+      }
+    });
   } catch (error) {
     console.error('Get registrations error:', error);
-    res.status(500).json({ error: 'Failed to fetch registrations' });
+    res.status(error.statusCode || 500).json({
+      error: error.statusCode ? error.message : 'Failed to fetch registrations'
+    });
   }
 });
 
@@ -586,38 +608,79 @@ router.get('/events/:id/analytics', async (req, res) => {
       return res.status(403).json({ error: 'Not authorized' });
     }
 
-    // Get all registrations with orders, tickets, and discount info
+    // ---- KPI SCALARS via index-backed aggregates (no row transfer) ----
+    const [
+      statusGroups,
+      failedRegistrations,
+      revenueAgg,
+      totalTickets,
+      checkedInCount
+    ] = await Promise.all([
+      // Registration counts grouped by status
+      prisma.registration.groupBy({
+        by: ['status'],
+        where: { eventId: id },
+        _count: { _all: true }
+      }),
+      // Failed registrations are derived from failed ORDERS (there is no FAILED
+      // registration status), counted at the database level.
+      prisma.registration.count({
+        where: { eventId: id, orders: { some: { status: 'FAILED' } } }
+      }),
+      // Paid revenue + paid order count
+      prisma.order.aggregate({
+        where: { status: 'PAID', registration: { eventId: id } },
+        _sum: { amountCents: true },
+        _count: { _all: true }
+      }),
+      // Total issued tickets for the event
+      prisma.ticket.count({ where: { order: { registration: { eventId: id } } } }),
+      // Checked-in tickets (either legacy scannedAt or checkedInAt)
+      prisma.ticket.count({
+        where: {
+          order: { registration: { eventId: id } },
+          OR: [{ checkedInAt: { not: null } }, { scannedAt: { not: null } }]
+        }
+      })
+    ]);
+
+    const statusCountFor = (status) =>
+      statusGroups.find((group) => group.status === status)?._count._all || 0;
+    const totalRegistrations = statusGroups.reduce((sum, group) => sum + group._count._all, 0);
+    const paidRegistrations = statusCountFor('PAID');
+    const pendingRegistrations = statusCountFor('PENDING');
+    const cancelledRegistrations = statusCountFor('CANCELLED');
+
+    const paidOrderCount = revenueAgg._count._all;
+    const totalRevenue = (revenueAgg._sum.amountCents || 0) / 100;
+    const averageOrderValue = paidOrderCount > 0 ? totalRevenue / paidOrderCount : 0;
+
+    const notCheckedInCount = totalTickets - checkedInCount;
+    const checkInRate = totalTickets > 0 ? (checkedInCount / totalTickets) * 100 : 0;
+
+    // ---- Lean row fetch for the time-series / breakdown charts ----
+    // Only the tiny scalar columns the charts need — no formResponse JSON blobs
+    // or nested discount/ticket records.
     const registrations = await prisma.registration.findMany({
       where: { eventId: id },
-      include: {
+      select: {
+        createdAt: true,
         orders: {
-          include: {
-            ticket: true,
-            discountCode: true
+          select: {
+            status: true,
+            createdAt: true,
+            amountCents: true,
+            provider: true,
+            discountCodeId: true,
+            ticket: { select: { scannedAt: true, checkedInAt: true } }
           }
         }
       },
       orderBy: { createdAt: 'desc' }
     });
 
-    const totalRegistrations = registrations.length;
-    const {
-      paidRegistrations,
-      pendingRegistrations,
-      failedRegistrations,
-      cancelledRegistrations
-    } = summarizeRegistrationStatuses(registrations);
-
-    // Revenue calculation
     const paidOrders = registrations.flatMap(r => r.orders.filter(o => o.status === 'PAID'));
-    const totalRevenue = paidOrders.reduce((sum, order) => sum + (order.amountCents || order.totalAmount || 0), 0) / 100;
-    const averageOrderValue = paidOrders.length > 0 ? totalRevenue / paidOrders.length : 0;
-
-    // Check-in stats
     const tickets = registrations.flatMap(r => r.orders.flatMap(o => o.ticket ? [o.ticket] : []));
-    const checkedInCount = tickets.filter(t => t.scannedAt || t.checkedInAt).length;
-    const notCheckedInCount = tickets.length - checkedInCount;
-    const checkInRate = tickets.length > 0 ? (checkedInCount / tickets.length) * 100 : 0;
 
     // ---- DAILY REGISTRATIONS (last 30 days) ----
     const today = new Date();
@@ -707,13 +770,15 @@ router.get('/events/:id/analytics', async (req, res) => {
       isActive: d.isActive
     }));
     const totalDiscountUses = discountUsage.reduce((s, d) => s + d.usedCount, 0);
-    // Estimate discount savings from orders that used a code
+    // Estimate discount savings from orders that used a code. The lean order
+    // fetch carries only discountCodeId, so resolve the code via event.discounts.
+    const discountById = new Map(event.discounts.map(d => [d.id, d]));
     const discountedOrders = paidOrders.filter(o => o.discountCodeId);
     const discountSavings = discountedOrders.reduce((sum, o) => {
-      const disc = o.discountCode;
+      const disc = discountById.get(o.discountCodeId);
       if (!disc) return sum;
       if (disc.type === 'PERCENTAGE') {
-        return sum + ((o.amountCents || o.totalAmount || 0) * disc.amount / (100 - disc.amount)) / 100;
+        return sum + ((o.amountCents || 0) * disc.amount / (100 - disc.amount)) / 100;
       }
       return sum + disc.amount / 100;
     }, 0);
@@ -744,29 +809,46 @@ router.get('/events/:id/analytics', async (req, res) => {
       providerBreakdown[provider].revenue += (o.amountCents || o.totalAmount || 0) / 100;
     });
 
-    // Recent registrations (top 15)
-    const recentRegistrations = registrations
-      .slice(0, 15)
-      .map(r => {
-        const ticket = r.orders?.[0]?.ticket;
-        return {
-          attendeeName: r.formResponse?.name || 'N/A',
-          email: r.userEmail,
-          status: r.status,
-          createdAt: r.createdAt,
-          ticketId: ticket ? ticket.id.substring(0, 8).toUpperCase() : null,
-          checkedIn: ticket ? !!(ticket.scannedAt || ticket.checkedInAt) : false,
-          amount: r.orders?.find(o => o.status === 'PAID')?.amountCents
-            ? (r.orders.find(o => o.status === 'PAID').amountCents / 100)
-            : null
-        };
-      });
+    // Recent registrations (top 15) — fetched with the extra fields the list
+    // needs (attendee name, ticket id) that the lean chart query omits.
+    const recentRegistrationRows = await prisma.registration.findMany({
+      where: { eventId: id },
+      orderBy: { createdAt: 'desc' },
+      take: 15,
+      select: {
+        userEmail: true,
+        status: true,
+        createdAt: true,
+        formResponse: true,
+        orders: {
+          select: {
+            status: true,
+            amountCents: true,
+            ticket: { select: { id: true, scannedAt: true, checkedInAt: true } }
+          }
+        }
+      }
+    });
+
+    const recentRegistrations = recentRegistrationRows.map(r => {
+      const ticket = r.orders?.[0]?.ticket;
+      return {
+        attendeeName: r.formResponse?.name || 'N/A',
+        email: r.userEmail,
+        status: r.status,
+        createdAt: r.createdAt,
+        ticketId: ticket ? ticket.id.substring(0, 8).toUpperCase() : null,
+        checkedIn: ticket ? !!(ticket.scannedAt || ticket.checkedInAt) : false,
+        amount: r.orders?.find(o => o.status === 'PAID')?.amountCents
+          ? (r.orders.find(o => o.status === 'PAID').amountCents / 100)
+          : null
+      };
+    });
 
     // Conversion rate
     const conversionRate = totalRegistrations > 0 ? (paidRegistrations / totalRegistrations) * 100 : 0;
 
     // ---- SUMMARY STATS ----
-    const totalTickets = tickets.length;
     const capacityUsed = event.capacity > 0 ? ((totalRegistrations / event.capacity) * 100) : null;
 
     res.json({
@@ -901,27 +983,34 @@ router.get('/financials', async (req, res) => {
       ? {}
       : { organizerId: req.user.id };
 
-    // Get all events for this organizer/admin
-    const events = await prisma.event.findMany({
-      where,
-      include: {
-        registrations: {
-          where: { status: 'PAID' },
-          include: {
-            orders: {
-              where: { status: 'PAID' }
-            }
-          }
-        }
-      }
-    });
+    // Scope: an organizer sees only their events; an admin sees everything.
+    const orderScopeWhere = { status: 'PAID', registration: { event: where } };
 
-    // Calculate total revenue and tickets
-    let totalRevenue = 0;
-    let totalTickets = 0;
+    // Only fetch the last 6 months of paid orders for the monthly chart.
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+
+    const [revenueAgg, scopedEvents, recentPaidOrders] = await Promise.all([
+      // All-time revenue + ticket count via aggregate (no row transfer).
+      prisma.order.aggregate({
+        where: orderScopeWhere,
+        _sum: { amountCents: true },
+        _count: { _all: true }
+      }),
+      // Lean event list just for the active-events count.
+      prisma.event.findMany({ where, select: { endTime: true } }),
+      // Lean recent paid orders for the monthly revenue buckets.
+      prisma.order.findMany({
+        where: { ...orderScopeWhere, createdAt: { gte: sixMonthsAgo } },
+        select: { amountCents: true, createdAt: true }
+      })
+    ]);
+
+    const totalRevenue = revenueAgg._sum.amountCents || 0;
+    const totalTickets = revenueAgg._count._all;
+
+    // Initialize last 6 months, then fill from the lean recent-orders window.
     const monthlyRevenue = {};
-
-    // Initialize last 6 months
     for (let i = 5; i >= 0; i--) {
       const date = new Date();
       date.setMonth(date.getMonth() - i);
@@ -929,20 +1018,12 @@ router.get('/financials', async (req, res) => {
       monthlyRevenue[key] = 0;
     }
 
-    events.forEach(event => {
-      event.registrations.forEach(reg => {
-        reg.orders.forEach(order => {
-          totalRevenue += order.amountCents || 0;
-          totalTickets += 1;
-
-          // Monthly breakdown
-          const orderDate = new Date(order.createdAt);
-          const monthKey = `${orderDate.getFullYear()}-${String(orderDate.getMonth() + 1).padStart(2, '0')}`;
-          if (monthlyRevenue[monthKey] !== undefined) {
-            monthlyRevenue[monthKey] += order.amountCents || 0;
-          }
-        });
-      });
+    recentPaidOrders.forEach(order => {
+      const orderDate = new Date(order.createdAt);
+      const monthKey = `${orderDate.getFullYear()}-${String(orderDate.getMonth() + 1).padStart(2, '0')}`;
+      if (monthlyRevenue[monthKey] !== undefined) {
+        monthlyRevenue[monthKey] += order.amountCents || 0;
+      }
     });
 
     // Calculate previous month's revenue for growth
@@ -963,7 +1044,7 @@ router.get('/financials', async (req, res) => {
     }
 
     // Active events count
-    const activeEvents = events.filter(e => new Date(e.endTime) > new Date()).length;
+    const activeEvents = scopedEvents.filter(e => new Date(e.endTime) > new Date()).length;
 
     // Convert monthly revenue to array for chart
     const revenueChart = Object.entries(monthlyRevenue).map(([month, amount]) => ({
@@ -1071,35 +1152,44 @@ router.get('/events/:id/attendees', async (req, res) => {
     }
 
     const orderWhere = buildAttendeeOrderWhere(status);
+    const pagination = parsePagination(req.query);
+    const where = {
+      eventId: id,
+      status: { in: ['PAID', 'CONFIRMED'] },
+      ...(search && {
+        OR: [
+          { userEmail: { contains: search, mode: 'insensitive' } },
+          { formResponse: { path: ['name'], string_contains: search } }
+        ]
+      })
+    };
 
-    const registrations = await prisma.registration.findMany({
-      where: {
-        eventId: id,
-        status: { in: ['PAID', 'CONFIRMED'] },
-        ...(search && {
-          OR: [
-            { userEmail: { contains: search, mode: 'insensitive' } },
-            { formResponse: { path: ['name'], string_contains: search } }
-          ]
-        })
-      },
-      include: {
-        orders: {
-          where: orderWhere,
-          include: {
-            ticket: true
+    const [total, registrations] = await Promise.all([
+      prisma.registration.count({ where }),
+      prisma.registration.findMany({
+        where,
+        include: {
+          orders: {
+            where: orderWhere,
+            include: {
+              ticket: true
+            }
           }
-        }
-      },
-      orderBy: { createdAt: 'desc' }
-    });
+        },
+        orderBy: { createdAt: 'desc' },
+        skip: pagination.skip,
+        take: pagination.take
+      })
+    ]);
 
     const attendees = mapRegistrationsToAttendees(registrations, status);
 
-    res.json(attendees);
+    res.json(buildPageResponse(attendees, total, pagination));
   } catch (error) {
     console.error('Get attendees error:', error);
-    res.status(500).json({ error: 'Failed to fetch attendees' });
+    res.status(error.statusCode || 500).json({
+      error: error.statusCode ? error.message : 'Failed to fetch attendees'
+    });
   }
 });
 
@@ -1351,23 +1441,15 @@ router.get('/events/:id/analytics/funnel', async (req, res) => {
       return res.status(403).json({ error: 'Not authorized' });
     }
 
-    // Get all registrations with their orders and tickets
-    const registrations = await prisma.registration.findMany({
-      where: { eventId: id },
-      include: {
-        orders: {
-          include: { ticket: true }
-        }
-      }
-    });
-
-    // Calculate funnel stages
-    const totalRegistrations = registrations.length;
-    const paidRegistrations = registrations.filter(r => r.status === 'PAID' || r.status === 'CONFIRMED').length;
-    const ticketsIssued = registrations.flatMap(r => r.orders.filter(o => o.ticket)).length;
-    const checkedIn = registrations.flatMap(r =>
-      r.orders.filter(o => o.ticket && o.ticket.checkedInAt)
-    ).length;
+    // Funnel stages via index-backed counts (no row transfer).
+    const [totalRegistrations, paidRegistrations, ticketsIssued, checkedIn] = await Promise.all([
+      prisma.registration.count({ where: { eventId: id } }),
+      prisma.registration.count({ where: { eventId: id, status: { in: ['PAID', 'CONFIRMED'] } } }),
+      prisma.ticket.count({ where: { order: { registration: { eventId: id } } } }),
+      prisma.ticket.count({
+        where: { order: { registration: { eventId: id } }, checkedInAt: { not: null } }
+      })
+    ]);
 
     // Calculate drop-off percentages
     const funnel = [
@@ -1411,28 +1493,28 @@ router.get('/events/:id/analytics/realtime', async (req, res) => {
       return res.status(403).json({ error: 'Not authorized' });
     }
 
-    // Get ticket stats
-    const tickets = await prisma.ticket.findMany({
-      where: {
-        order: {
-          registration: { eventId: id },
-          status: 'PAID'
-        }
-      },
-      select: {
-        checkedInAt: true,
-        checkedOutAt: true
-      }
-    });
+    const ticketScope = { order: { registration: { eventId: id }, status: 'PAID' } };
 
-    const totalTickets = tickets.length;
-    const checkedIn = tickets.filter(t => t.checkedInAt).length;
-    const checkedOut = tickets.filter(t => t.checkedOutAt).length;
+    // Six-hour window for the hourly check-in chart.
+    const now = new Date();
+    const windowStart = new Date(now);
+    windowStart.setHours(now.getHours() - 5, 0, 0, 0);
+
+    // Scalars via counts; only the recent check-ins are pulled as rows.
+    const [totalTickets, checkedIn, checkedOut, recentCheckins] = await Promise.all([
+      prisma.ticket.count({ where: ticketScope }),
+      prisma.ticket.count({ where: { ...ticketScope, checkedInAt: { not: null } } }),
+      prisma.ticket.count({ where: { ...ticketScope, checkedOutAt: { not: null } } }),
+      prisma.ticket.findMany({
+        where: { ...ticketScope, checkedInAt: { gte: windowStart } },
+        select: { checkedInAt: true }
+      })
+    ]);
+
     const currentlyInside = checkedIn - checkedOut;
     const notYetArrived = totalTickets - checkedIn;
 
     // Check-in rate per hour (last 6 hours)
-    const now = new Date();
     const hourlyData = [];
     for (let i = 5; i >= 0; i--) {
       const hourStart = new Date(now);
@@ -1440,7 +1522,7 @@ router.get('/events/:id/analytics/realtime', async (req, res) => {
       const hourEnd = new Date(hourStart);
       hourEnd.setHours(hourStart.getHours() + 1);
 
-      const count = tickets.filter(t => {
+      const count = recentCheckins.filter(t => {
         if (!t.checkedInAt) return false;
         const checkIn = new Date(t.checkedInAt);
         return checkIn >= hourStart && checkIn < hourEnd;

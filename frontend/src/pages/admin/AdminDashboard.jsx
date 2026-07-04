@@ -1,19 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { Calendar, Users, IndianRupee, TrendingUp, Shield, Megaphone } from 'lucide-react';
 import api from '../../utils/api';
-import toast from 'react-hot-toast';
 import { useAuth } from '../../context/AuthContext';
-import { ErrorState, LoadingBlock } from '../../components/StateBlock';
+import { ErrorState } from '../../components/StateBlock';
+import { Skeleton, SkeletonStatGrid, SkeletonCardList } from '../../components/Skeleton';
 
 import BroadcastModal from '../../components/BroadcastModal';
-
-const defaultStats = {
-  totalEvents: 0,
-  publishedEvents: 0,
-  totalRegistrations: 0,
-  totalRevenue: 0
-};
 
 const toFiniteNumber = (value, fallback = 0) => {
   const number = Number(value);
@@ -23,65 +17,48 @@ const toFiniteNumber = (value, fallback = 0) => {
 export default function AdminDashboard() {
   const { user } = useAuth();
   const [isBroadcastOpen, setIsBroadcastOpen] = useState(false);
-  const [stats, setStats] = useState(defaultStats);
-  const [recentEvents, setRecentEvents] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState('');
 
   const isAdmin = user?.role === 'ADMIN';
 
-  useEffect(() => {
-    fetchDashboardData();
-  }, []);
-
-  const fetchDashboardData = async () => {
-    setLoading(true);
-    setLoadError('');
-
-    try {
-      const response = await api.get('/admin/events');
-      const events = Array.isArray(response.data) ? response.data : [];
-
-      setRecentEvents(events.slice(0, 5));
-
-      const totalRegistrations = events.reduce(
-        (sum, event) => sum + toFiniteNumber(event._count?.registrations),
-        0
-      );
-
-      const totalRevenue = events.reduce(
-        (sum, event) => sum + toFiniteNumber(event._count?.registrations) * toFiniteNumber(event.priceCents),
-        0
-      );
-
-      setStats({
-        totalEvents: events.length,
-        publishedEvents: events.filter(e => e.published).length,
-        totalRegistrations,
-        totalRevenue: totalRevenue / 100
-      });
-    } catch (error) {
-      const message = error.response?.data?.error || 'Failed to load dashboard data';
-      setLoadError(message);
-      setRecentEvents([]);
-      setStats(defaultStats);
-      toast.error(message);
-    } finally {
-      setLoading(false);
+  const { data: events = [], isLoading, isError, error, refetch } = useQuery({
+    queryKey: ['admin', 'events'],
+    queryFn: async () => {
+      const res = await api.get('/admin/events');
+      return Array.isArray(res.data) ? res.data : [];
     }
+  });
+
+  const recentEvents = events.slice(0, 5);
+  const stats = {
+    totalEvents: events.length,
+    publishedEvents: events.filter(e => e.published).length,
+    totalRegistrations: events.reduce(
+      (sum, event) => sum + toFiniteNumber(event._count?.registrations),
+      0
+    ),
+    totalRevenue: events.reduce(
+      (sum, event) => sum + toFiniteNumber(event._count?.registrations) * toFiniteNumber(event.priceCents),
+      0
+    ) / 100
   };
 
-  if (loading) {
-    return <LoadingBlock title="Loading dashboard" message="Fetching admin totals and recent events." />;
+  if (isLoading) {
+    return (
+      <div className="space-y-8">
+        <Skeleton className="h-9 w-64" />
+        <SkeletonStatGrid count={4} />
+        <SkeletonCardList count={5} />
+      </div>
+    );
   }
 
-  if (loadError) {
+  if (isError) {
     return (
       <ErrorState
         title="Could not load dashboard"
-        message={loadError}
+        message={error?.response?.data?.error || 'Failed to load dashboard data'}
         action={(
-          <button type="button" onClick={fetchDashboardData} className="admin-primary-action">
+          <button type="button" onClick={() => refetch()} className="admin-primary-action">
             Retry
           </button>
         )}

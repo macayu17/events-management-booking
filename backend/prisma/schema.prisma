@@ -114,6 +114,8 @@ model Registration {
   event  Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
   orders Order[]
 
+  @@index([eventId])
+  @@index([eventId, status])
   @@map("registrations")
 }
 
@@ -143,6 +145,9 @@ model Order {
   discountCode   DiscountCode? @relation(fields: [discountCodeId], references: [id])
 
   @@unique([provider, providerOrderId])
+  @@index([registrationId])
+  @@index([discountCodeId])
+  @@index([status])
   @@map("orders")
 }
 
@@ -175,6 +180,7 @@ model Ticket {
 
   order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
+  @@index([checkedInAt])
   @@map("tickets")
 }
 
@@ -229,6 +235,7 @@ model Review {
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([eventId, userId]) // One review per user per event
+  @@index([eventId])
   @@map("reviews")
 }
 
@@ -249,6 +256,7 @@ model Poll {
   event   Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
   options PollOption[]
 
+  @@index([eventId])
   @@map("polls")
 }
 
@@ -261,6 +269,7 @@ model PollOption {
   poll  Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
   votes PollVote[]
 
+  @@index([pollId])
   @@map("poll_options")
 }
 
@@ -273,6 +282,7 @@ model PollVote {
   option PollOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
 
   @@unique([optionId, voterEmail]) // One vote per option per email
+  @@index([optionId])
   @@map("poll_votes")
 }
 
@@ -330,6 +340,7 @@ model PushSubscription {
   userEmail String?  @map("user_email")
   createdAt DateTime @default(now()) @map("created_at")
 
+  @@index([userEmail])
   @@map("push_subscriptions")
 }
 
@@ -351,6 +362,7 @@ model TicketTier {
 
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
+  @@index([eventId])
   @@map("ticket_tiers")
 }
 
@@ -372,6 +384,7 @@ model Speaker {
 
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
+  @@index([eventId])
   @@map("speakers")
 }
 
@@ -391,5 +404,6 @@ model EventReminder {
 
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
+  @@index([eventId])
   @@map("event_reminders")
 }

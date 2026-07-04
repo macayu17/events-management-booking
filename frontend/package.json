@@ -13,6 +13,7 @@
     "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.101.2",
     "axios": "^1.6.2",
     "date-fns": "^2.30.0",
     "html5-qrcode": "^2.3.8",

@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { Plus, Edit, Trash2, FileText, Users, Eye, EyeOff, BarChart3, MoreVertical, MapPin, CalendarDays, Tag, Copy, Settings } from 'lucide-react';
 import api from '../../utils/api';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 import Dock from '../../components/Dock';
 import { ErrorState } from '../../components/StateBlock';
+import { SkeletonCardList } from '../../components/Skeleton';
 import useConfirmDialog from '../../hooks/useConfirmDialog';
 
 const openPublicEvent = (eventId) => {
@@ -43,18 +45,19 @@ const resolveActionIcon = (action, event) => {
 };
 
 export default function EventListPage() {
-  const [events, setEvents] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState('');
   const [openMenuId, setOpenMenuId] = useState(null);
   const [selectedEventId, setSelectedEventId] = useState(null);
   const menuRef = useRef(null);
   const navigate = useNavigate();
   const { confirm, dialog } = useConfirmDialog();
 
-  useEffect(() => {
-    fetchEvents({ showSpinner: true });
-  }, []);
+  const { data: events = [], isLoading, isError, error, refetch } = useQuery({
+    queryKey: ['admin', 'events'],
+    queryFn: async () => {
+      const res = await api.get('/admin/events');
+      return Array.isArray(res.data) ? res.data : [];
+    }
+  });
 
   useEffect(() => {
     if (events.length === 0) {
@@ -77,21 +80,6 @@ export default function EventListPage() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
-
-  const fetchEvents = async ({ showSpinner = false } = {}) => {
-    if (showSpinner) setLoading(true);
-    setLoadError('');
-
-    try {
-      const response = await api.get('/admin/events');
-      setEvents(response.data);
-    } catch (error) {
-      setLoadError(error.response?.data?.error || 'Failed to fetch events');
-      toast.error('Failed to fetch events');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const toggleMenu = (e, eventId) => {
     e.stopPropagation();
@@ -148,7 +136,7 @@ export default function EventListPage() {
     try {
       await api.delete(`/admin/events/${id}`);
       toast.success('Event deleted successfully');
-      fetchEvents();
+      refetch();
     } catch (error) {
       toast.error(error.response?.data?.error || 'Failed to delete event');
     }
@@ -160,7 +148,7 @@ export default function EventListPage() {
         published: !currentStatus
       });
       toast.success(`Event ${!currentStatus ? 'published' : 'unpublished'} successfully`);
-      fetchEvents();
+      refetch();
     } catch (error) {
       toast.error('Failed to update event');
     }
@@ -183,7 +171,7 @@ export default function EventListPage() {
 
       await api.post('/admin/events', newEvent);
       toast.success('Event duplicated successfully');
-      fetchEvents();
+      refetch();
     } catch (error) {
       toast.error('Failed to duplicate event');
     }
@@ -201,21 +189,21 @@ export default function EventListPage() {
       })
     : [];
 
-  if (loading) {
+  if (isLoading) {
     return (
-      <div className="flex justify-center py-20">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-[#E23744] border-r-2 border-[#E23744]/30"></div>
+      <div className="animate-fade-in">
+        <SkeletonCardList count={6} />
       </div>
     );
   }
 
-  if (loadError) {
+  if (isError) {
     return (
       <ErrorState
         title="Could not load events"
-        message={loadError}
+        message={error?.response?.data?.error || 'Failed to fetch events'}
         action={(
-          <button type="button" onClick={() => fetchEvents({ showSpinner: true })} className="admin-primary-action">
+          <button type="button" onClick={() => refetch()} className="admin-primary-action">
             Retry
           </button>
         )}

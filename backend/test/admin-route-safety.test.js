@@ -45,8 +45,13 @@ test('admin analytics derives failed registrations from failed orders', () => {
   const analyticsRoute = source.slice(analyticsStart, analyticsEnd);
 
   assert.notEqual(analyticsStart, -1);
-  assert.match(analyticsRoute, /summarizeRegistrationStatuses\(registrations\)/);
+  // Failed registrations are derived from failed ORDERS at the database level,
+  // not from a (non-existent) FAILED registration status.
+  assert.match(analyticsRoute, /orders:\s*\{\s*some:\s*\{\s*status:\s*'FAILED'\s*\}\s*\}/);
   assert.doesNotMatch(analyticsRoute, /r\.status === 'FAILED'/);
+  // KPI scalars come from index-backed aggregates rather than in-memory reduces.
+  assert.match(analyticsRoute, /prisma\.registration\.groupBy/);
+  assert.match(analyticsRoute, /prisma\.order\.aggregate/);
 });
 
 test('admin event create and update paths parse integer fields before Prisma writes', () => {

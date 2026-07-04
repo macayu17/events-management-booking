@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 import useConfirmDialog from '../../hooks/useConfirmDialog';
 import { ErrorState } from '../../components/StateBlock';
+import { Skeleton, SkeletonStatGrid, SkeletonTable } from '../../components/Skeleton';
 
 const encodeCsvCell = (value) => {
   const text = value == null ? '' : String(value);
@@ -18,17 +19,24 @@ const buildCsv = (headers, rows) => [
   ...rows.map(row => row.map(encodeCsvCell).join(','))
 ].join('\r\n');
 
+const PAGE_SIZE = 50;
+
 export default function RegistrationsPage() {
   const { id } = useParams();
   const [registrations, setRegistrations] = useState([]);
   const [event, setEvent] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState({ total: 0, totalPages: 1 });
+  const [summary, setSummary] = useState({ paidRegistrations: 0, totalRevenueCents: 0 });
+  const [exporting, setExporting] = useState(false);
   const { confirm, dialog } = useConfirmDialog();
 
   useEffect(() => {
     fetchData({ showSpinner: true });
-  }, [id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, page]);
 
   const fetchData = async ({ showSpinner = false } = {}) => {
     if (showSpinner) setLoading(true);
@@ -37,11 +45,13 @@ export default function RegistrationsPage() {
     try {
       const [eventRes, regRes] = await Promise.all([
         api.get(`/admin/events/${id}`),
-        api.get(`/admin/events/${id}/registrations`)
+        api.get(`/admin/events/${id}/registrations`, { params: { page, pageSize: PAGE_SIZE } })
       ]);
 
       setEvent(eventRes.data);
-      setRegistrations(regRes.data);
+      setRegistrations(regRes.data.data || []);
+      setPagination(regRes.data.pagination || { total: 0, totalPages: 1 });
+      if (regRes.data.summary) setSummary(regRes.data.summary);
     } catch (error) {
       setLoadError(error.response?.data?.error || 'Failed to fetch registrations');
       toast.error('Failed to fetch registrations');
@@ -94,20 +104,32 @@ export default function RegistrationsPage() {
     }
   };
 
-  const exportToCSV = () => {
-    if (registrations.length === 0) {
+  const exportToCSV = async () => {
+    if (pagination.total === 0) {
       toast.error('No registrations to export');
+      return;
+    }
+
+    setExporting(true);
+    let exportRows = [];
+    try {
+      // Pull the full (bounded) set rather than just the current page.
+      const res = await api.get(`/admin/events/${id}/registrations`, { params: { all: true } });
+      exportRows = res.data.data || [];
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Failed to export registrations');
+      setExporting(false);
       return;
     }
 
     // Get all unique form fields
     const allFields = new Set();
-    registrations.forEach(reg => {
+    exportRows.forEach(reg => {
       Object.keys(reg.formResponse || {}).forEach(key => allFields.add(key));
     });
 
     const headers = ['Registration ID', 'Status', 'Date', ...Array.from(allFields), 'Payment Status', 'Check-in Status', 'Check-in Time'];
-    const rows = registrations.map(reg => {
+    const rows = exportRows.map(reg => {
       const firstOrder = reg.orders?.[0];
       const ticket = firstOrder?.ticket;
 
@@ -132,13 +154,16 @@ export default function RegistrationsPage() {
     a.click();
     window.URL.revokeObjectURL(url);
 
+    setExporting(false);
     toast.success('CSV downloaded successfully');
   };
 
   if (loading) {
     return (
-      <div className="flex justify-center py-12">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-[#E23744] border-r-2 border-[#E23744]/30"></div>
+      <div className="space-y-8">
+        <Skeleton className="h-9 w-72" />
+        <SkeletonStatGrid count={3} />
+        <SkeletonTable rows={8} columns={7} />
       </div>
     );
   }
@@ -157,10 +182,8 @@ export default function RegistrationsPage() {
     );
   }
 
-  const paidRegistrations = registrations.filter(r => r.status === 'PAID').length;
-  const totalRevenue = registrations
-    .filter(r => r.status === 'PAID')
-    .reduce((sum, r) => sum + (r.orders?.[0]?.amountCents || 0), 0) / 100;
+  const paidRegistrations = summary.paidRegistrations;
+  const totalRevenue = (summary.totalRevenueCents || 0) / 100;
 
   return (
     <div>
@@ -170,9 +193,9 @@ export default function RegistrationsPage() {
           <h1 className="truncate text-3xl font-bold text-[#f7efe3]">{event?.title || 'Event registrations'}</h1>
           <p className="admin-muted mt-2">Event Registrations</p>
         </div>
-        <button onClick={exportToCSV} className="admin-primary-action inline-flex items-center gap-2 self-start sm:self-auto">
+        <button onClick={exportToCSV} disabled={exporting} className="admin-primary-action inline-flex items-center gap-2 self-start sm:self-auto disabled:opacity-60">
           <Download size={20} />
-          Export CSV
+          {exporting ? 'Exporting…' : 'Export CSV'}
         </button>
       </div>
 
@@ -180,7 +203,7 @@ export default function RegistrationsPage() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         <div className="admin-card admin-card-hover min-w-0 p-5 sm:p-6">
           <p className="admin-muted mb-1 text-sm">Total Registrations</p>
-          <p className="truncate text-3xl font-bold text-[#f7efe3]">{registrations.length}</p>
+          <p className="truncate text-3xl font-bold text-[#f7efe3]">{pagination.total}</p>
         </div>
         <div className="admin-card admin-card-hover min-w-0 p-5 sm:p-6">
           <p className="admin-muted mb-1 text-sm">Paid Registrations</p>
@@ -314,6 +337,33 @@ export default function RegistrationsPage() {
           </div>
         )}
       </div>
+
+      {pagination.totalPages > 1 && (
+        <div className="mt-4 flex flex-col items-center justify-between gap-3 sm:flex-row">
+          <p className="admin-muted text-sm">
+            Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, pagination.total)} of {pagination.total}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPage(p => Math.max(1, p - 1))}
+              disabled={page <= 1}
+              className="btn btn-secondary disabled:opacity-50"
+            >
+              Previous
+            </button>
+            <span className="admin-muted text-sm">Page {page} of {pagination.totalPages}</span>
+            <button
+              type="button"
+              onClick={() => setPage(p => Math.min(pagination.totalPages, p + 1))}
+              disabled={page >= pagination.totalPages}
+              className="btn btn-secondary disabled:opacity-50"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

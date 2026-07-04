@@ -121,11 +121,13 @@ export default function EventControlPage() {
         try {
             setAttendeesError('');
             const status = statusFilter !== 'all' ? statusFilter : undefined;
+            // Attendees drive instant client-side search + the check-in tab, so
+            // load the full (server-bounded) set rather than a single page.
             const res = await api.get(`/admin/events/${eventId}/attendees`, {
-                params: { status },
+                params: { status, all: true },
                 signal
             });
-            setAttendees(res.data);
+            setAttendees(res.data.data || []);
         } catch (error) {
             if (isCanceledRequest(error)) return;
             setAttendeesError(error.response?.data?.error || 'Failed to load attendees');
