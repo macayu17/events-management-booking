@@ -35,7 +35,6 @@ export default function RegistrationsPage() {
 
   useEffect(() => {
     fetchData({ showSpinner: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, page]);
 
   const fetchData = async ({ showSpinner = false } = {}) => {
