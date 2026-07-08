@@ -51,6 +51,26 @@ const pdfFileFilter = (req, file, cb) => {
   }
 };
 
+const fontFileFilter = (req, file, cb) => {
+  const allowedExtensions = new Set(['.ttf', '.otf']);
+  const allowedMimeTypes = new Set([
+    'font/ttf',
+    'font/otf',
+    'application/font-sfnt',
+    'application/x-font-ttf',
+    'application/x-font-otf',
+    'application/octet-stream',
+  ]);
+  const extname = allowedExtensions.has(path.extname(file.originalname).toLowerCase());
+  const mimetype = allowedMimeTypes.has(file.mimetype);
+
+  if (mimetype && extname) {
+    return cb(null, true);
+  }
+
+  cb(new Error('Only TTF or OTF font files are allowed'));
+};
+
 const hasS3PosterFallback = () => process.env.NODE_ENV === 'production' && process.env.AWS_ACCESS_KEY_ID;
 
 // Posters only use Cloudinary, S3 fallback, or local disk. R2 is reserved for generated PDF assets.
@@ -83,4 +103,12 @@ export const uploadPdf = multer({
     fileSize: parseInt(process.env.MAX_FILE_SIZE) || 10 * 1024 * 1024 // 10MB for PDFs
   },
   fileFilter: pdfFileFilter
+});
+
+export const uploadFont = multer({
+  storage: getDocumentStorage(),
+  limits: {
+    fileSize: parseInt(process.env.MAX_FONT_FILE_SIZE) || 4 * 1024 * 1024
+  },
+  fileFilter: fontFileFilter
 });

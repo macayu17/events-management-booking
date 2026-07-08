@@ -145,6 +145,10 @@ const buildEventUpdateData = (body = {}, { eventId, existingEvent } = {}) => {
     data.published = parseBooleanField(body.published, 'published');
   }
 
+  if (hasOwn(body, 'featured')) {
+    data.featured = parseBooleanField(body.featured, 'featured');
+  }
+
   if (hasOwn(body, 'ticketStyle')) {
     const ticketStyle = body.ticketStyle;
     if (ticketStyle !== null && (Array.isArray(ticketStyle) || typeof ticketStyle !== 'object')) {

@@ -1,10 +1,14 @@
+import { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { CheckCircle, Mail, Calendar, Download, ArrowRight } from 'lucide-react';
+import { Calendar, Download, ArrowRight } from 'lucide-react';
+import QRCode from 'qrcode';
 import ShareButtons from '../../components/ShareButtons';
+import Barcode from '../../components/Barcode';
 import { buildApiUrl } from '../../utils/api';
 
 export default function SuccessPage() {
   const { state } = useLocation();
+  const [qrDataUrl, setQrDataUrl] = useState('');
   const eventId = state?.eventId ? encodeURIComponent(state.eventId) : null;
   const orderId = state?.orderId ? encodeURIComponent(state.orderId) : null;
   const hasSuccessContext = Boolean(state?.eventId || state?.orderId || state?.downloadToken);
@@ -12,121 +16,81 @@ export default function SuccessPage() {
     ? `${buildApiUrl(`/tickets/order/${orderId}/download`)}?token=${encodeURIComponent(state.downloadToken)}`
     : null;
 
+  // Real, scannable QR encoding the ticket download link (falls back to the event page).
+  useEffect(() => {
+    const target = ticketDownloadUrl
+      || (state?.eventId ? `${window.location.origin}/events/${state.eventId}` : window.location.origin);
+    QRCode.toDataURL(target, { margin: 0, width: 240, errorCorrectionLevel: 'M', color: { dark: '#151016', light: '#ffffff' } })
+      .then(setQrDataUrl)
+      .catch(() => setQrDataUrl(''));
+  }, [ticketDownloadUrl, state]);
+
   if (!hasSuccessContext) {
     return (
-      <div className="relative z-10 flex min-h-[62vh] items-center justify-center py-8 text-[#f7efe3]">
-        <section className="w-full max-w-xl rounded-[1.25rem] border border-white/10 bg-[#12100e] p-6 shadow-[0_24px_90px_rgba(0,0,0,0.28)] sm:p-8">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-[#E23744]/20 bg-[#E23744]/10 text-[#ff9aa2]">
-            <CheckCircle size={32} />
-          </div>
-          <p className="mt-6 text-xs font-black uppercase tracking-[0.2em] text-[#716960]">No ticket session</p>
-          <h1 className="mt-2 text-3xl font-black leading-tight tracking-normal text-[#f7efe3]">
-            This confirmation link has no ticket details.
-          </h1>
-          <p className="mt-3 text-sm leading-7 text-[#a99f95]">
-            Open this page from a completed registration so ticket actions can be shown.
-          </p>
-          <Link
-            to="/"
-            className="mt-7 inline-flex items-center justify-center gap-2 rounded-xl bg-[#E23744] px-5 py-3 text-sm font-black text-white transition-colors hover:bg-[#d12c39] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744]"
-          >
-            Explore Events
-            <ArrowRight size={18} />
-          </Link>
-        </section>
+      <div className="flex min-h-[62vh] items-center justify-center py-8">
+        <div className="ticket-card w-full max-w-xl p-8 text-center">
+          <p className="mono-accent">No ticket session</p>
+          <h1 className="mt-3 font-display text-3xl uppercase">This link has no ticket details.</h1>
+          <p className="mt-3 text-sm text-ink-55">Open this page from a completed registration so ticket actions can be shown.</p>
+          <Link to="/" className="btn-accent mt-7 inline-flex items-center justify-center gap-2">Explore events <ArrowRight size={18} /></Link>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="relative z-10 flex min-h-[62vh] items-center justify-center py-8 text-[#f7efe3]">
-      <section className="w-full max-w-2xl rounded-[1.25rem] border border-white/10 bg-[#12100e] p-5 shadow-[0_24px_90px_rgba(0,0,0,0.28)] sm:p-7 lg:p-8">
-        <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
-          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-emerald-400/20 bg-emerald-400/10 text-emerald-300">
-            <CheckCircle size={34} />
-          </div>
+    <div className="flex min-h-[62vh] flex-col items-center py-10">
+      <div
+        className="inline-block rounded-lg border-4 px-5 py-0.5 font-display text-5xl uppercase text-accent"
+        style={{ borderColor: 'var(--accent)', transform: 'rotate(-3deg)' }}
+      >You&apos;re in.</div>
 
+      {/* Ticket */}
+      <div className="ticket-card relative mt-8 w-full max-w-lg text-left">
+        <div className="p-7 pb-5">
+          <div className="mono-accent">Registration complete</div>
+          <div className="mt-2 font-display text-3xl uppercase">Your ticket is ready</div>
+          <p className="mt-2 text-sm text-ink-55">We sent the QR ticket to your email. Keep it handy for check-in.</p>
+        </div>
+
+        <div className="relative flex items-center gap-5 border-t-2 border-dashed p-6" style={{ borderColor: 'var(--dash)' }}>
+          <span className="ticket-notch -left-[10px] -top-[10px]" aria-hidden="true" />
+          <span className="ticket-notch -top-[10px] right-[-10px]" style={{ left: 'auto' }} aria-hidden="true" />
+          <div className="flex h-[110px] w-[110px] shrink-0 items-center justify-center rounded-md bg-white p-1.5" style={{ border: '2px solid var(--ink)' }}>
+            {qrDataUrl && <img src={qrDataUrl} alt="Ticket QR code" className="h-full w-full" />}
+          </div>
           <div className="min-w-0 flex-1">
-            <p className="text-xs font-black uppercase tracking-[0.2em] text-[#716960]">Registration complete</p>
-            <h1 className="mt-2 break-words text-3xl font-black leading-tight tracking-normal text-[#f7efe3] sm:text-4xl">
-              Your ticket is ready.
-            </h1>
-            <p className="mt-3 max-w-xl text-sm leading-7 text-[#a99f95] sm:text-base">
-              We sent the ticket details to your email. Keep the QR ticket handy for check-in.
-            </p>
+            <div className="mono-label">Scan at gate</div>
+            {orderId && <div className="mt-1.5 font-mono text-[13px] font-semibold tracking-wide">№ {String(state.orderId).slice(0, 12).toUpperCase()}</div>}
+            <Barcode seed={orderId || 'occasio'} height={24} className="mt-3" />
           </div>
         </div>
+      </div>
 
-        <div className="mt-7 border-t border-white/10 pt-6">
-          <div className="flex min-w-0 items-start gap-4">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#E23744]/15 bg-[#E23744]/10 text-[#ff9aa2]">
-              <Mail size={22} />
-            </div>
-            <div className="min-w-0">
-              <h2 className="font-black text-[#f7efe3]">Check your email</h2>
-              <p className="mt-1 text-sm leading-6 text-[#a99f95]">
-                Look for the ticket email with the QR code. If it is not in your inbox, check spam or promotions.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-7 space-y-3 border-t border-white/10 pt-6">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {eventId && (
-              <a
-                href={buildApiUrl(`/events/${eventId}/calendar`)}
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-5 py-3.5 text-sm font-bold text-[#f7efe3] transition-colors hover:bg-white/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744]"
-              >
-                <Calendar size={18} />
-                <span>Add to Calendar</span>
-              </a>
-            )}
-
-            {ticketDownloadUrl && (
-              <a
-                href={ticketDownloadUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-5 py-3.5 text-sm font-bold text-[#f7efe3] transition-colors hover:bg-white/[0.08] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744]"
-              >
-                <Download size={18} />
-                <span>Download Ticket</span>
-              </a>
-            )}
-          </div>
-
-          <Link
-            to="/"
-            className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#E23744] px-5 py-4 text-base font-black text-white transition-colors hover:bg-[#d12c39] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744] focus-visible:ring-offset-2 focus-visible:ring-offset-[#12100e]"
-          >
-            Browse More Events
-            <ArrowRight size={20} />
-          </Link>
-        </div>
-
-        {state?.eventId && (
-          <div className="mt-7 border-t border-white/10 pt-6">
-            <p className="mb-4 text-xs font-black uppercase tracking-[0.2em] text-[#716960]">
-              Share this event
-            </p>
-            <ShareButtons
-              title="Just booked my ticket. Check out this event"
-              url={`${window.location.origin}/events/${state.eventId}`}
-            />
-          </div>
-        )}
-
-        <p className="mt-7 border-t border-white/10 pt-5 text-sm text-[#8f867d]">
-          Need help? Contact{' '}
-          <a
-            href="mailto:support@occasio.com"
-            className="font-bold text-[#d9d0c6] underline decoration-white/20 underline-offset-4 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E23744]"
-          >
-            support@occasio.com
+      {/* Actions */}
+      <div className="mt-6 grid w-full max-w-lg grid-cols-1 gap-2.5 sm:grid-cols-2">
+        {eventId && (
+          <a href={buildApiUrl(`/events/${eventId}/calendar`)} className="btn-outline inline-flex items-center justify-center gap-2">
+            <Calendar size={18} /> Add to calendar
           </a>
-        </p>
-      </section>
+        )}
+        {ticketDownloadUrl && (
+          <a href={ticketDownloadUrl} target="_blank" rel="noopener noreferrer" className="btn-ink inline-flex items-center justify-center gap-2">
+            <Download size={18} /> Download ticket
+          </a>
+        )}
+      </div>
+
+      <Link to="/" className="mt-3 font-mono text-[11px] font-semibold uppercase tracking-[0.15em] text-ink-55 hover:text-accent">
+        Browse more events →
+      </Link>
+
+      {state?.eventId && (
+        <div className="mt-8 w-full max-w-lg border-t border-dashed pt-6 text-center" style={{ borderColor: 'var(--dash)' }}>
+          <p className="mono-label mb-4">Share this event</p>
+          <ShareButtons title="Just booked my ticket. Check out this event" url={`${window.location.origin}/events/${state.eventId}`} />
+        </div>
+      )}
     </div>
   );
 }

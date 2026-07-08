@@ -4,6 +4,7 @@ import { resolveLocalUploadPath } from './local-upload-path.util.js';
 export const CERTIFICATE_TYPE_VALUES = new Set(['participation', 'first_prize', 'second_prize', 'third_prize']);
 export const CERTIFICATE_ACCESS_ROLES = ['MANAGER', 'SUPER_MANAGER'];
 export const CERTIFICATE_TEMPLATE_STORAGE_PREFIX = 'certificates/templates';
+export const CERTIFICATE_FONT_STORAGE_PREFIX = 'certificates/fonts';
 
 const badRequest = (message) => {
   const error = new Error(message);
@@ -29,6 +30,10 @@ const safeStoragePathPart = (value, fieldName = 'value') => {
 
 export const getCertificateTemplateStoragePrefix = (eventId) => (
   `${CERTIFICATE_TEMPLATE_STORAGE_PREFIX}/${safeStoragePathPart(eventId, 'eventId')}`
+);
+
+export const getCertificateFontStoragePrefix = (eventId) => (
+  `${CERTIFICATE_FONT_STORAGE_PREFIX}/${safeStoragePathPart(eventId, 'eventId')}`
 );
 
 export const normalizeCertificateType = (certificateType = 'participation') => {
@@ -101,6 +106,22 @@ const getCertificateTemplatePath = (templateRef) => {
   return null;
 };
 
+const getCertificateFontPath = (fontRef) => {
+  const r2Ref = parseR2Ref(fontRef);
+  if (r2Ref?.key?.startsWith(`${CERTIFICATE_FONT_STORAGE_PREFIX}/`)) return r2Ref.key;
+
+  const cloudinaryPublicId = getCloudinaryPublicId(fontRef);
+  const cloudinaryPrefix = `occasio/${CERTIFICATE_FONT_STORAGE_PREFIX}/`;
+  if (cloudinaryPublicId?.startsWith(cloudinaryPrefix)) {
+    return cloudinaryPublicId.slice('occasio/'.length);
+  }
+
+  const localPath = getLocalUploadRelativePath(fontRef);
+  if (localPath?.startsWith(`${CERTIFICATE_FONT_STORAGE_PREFIX}/`)) return localPath;
+
+  return null;
+};
+
 const getTemplateEventPathPart = (templatePath) => {
   if (!templatePath?.startsWith(`${CERTIFICATE_TEMPLATE_STORAGE_PREFIX}/`)) return null;
   const remainder = templatePath.slice(`${CERTIFICATE_TEMPLATE_STORAGE_PREFIX}/`.length);
@@ -111,6 +132,11 @@ const getTemplateEventPathPart = (templatePath) => {
 export const isCertificateTemplateRefScopedToEvent = (templateRef, eventId) => {
   const templatePath = getCertificateTemplatePath(templateRef);
   return getTemplateEventPathPart(templatePath) === safeStoragePathPart(eventId, 'eventId');
+};
+
+export const isCertificateFontRefScopedToEvent = (fontRef, eventId) => {
+  const fontPath = getCertificateFontPath(fontRef);
+  return getTemplateEventPathPart(fontPath?.replace(CERTIFICATE_FONT_STORAGE_PREFIX, CERTIFICATE_TEMPLATE_STORAGE_PREFIX)) === safeStoragePathPart(eventId, 'eventId');
 };
 
 const assertTemplateRefBelongsToEvent = (templateRef, eventId, { allowLegacyGlobalTemplateRef = false } = {}) => {
@@ -127,6 +153,23 @@ const assertTemplateRefBelongsToEvent = (templateRef, eventId, { allowLegacyGlob
   if (allowLegacyGlobalTemplateRef) return;
 
   throw badRequest('Certificate template must be uploaded for this event');
+};
+
+const assertFontRefBelongsToEvent = (fontRef, eventId) => {
+  if (!eventId) return;
+
+  const fontPath = getCertificateFontPath(fontRef);
+  const scopedEventId = fontPath?.startsWith(`${CERTIFICATE_FONT_STORAGE_PREFIX}/`)
+    ? fontPath.slice(`${CERTIFICATE_FONT_STORAGE_PREFIX}/`.length).split('/').filter(Boolean)[0]
+    : null;
+  const expectedEventId = safeStoragePathPart(eventId, 'eventId');
+
+  if (scopedEventId === expectedEventId) return;
+  if (scopedEventId && scopedEventId !== expectedEventId) {
+    throw badRequest('Certificate font does not belong to this event');
+  }
+
+  throw badRequest('Certificate font must be uploaded for this event');
 };
 
 export const validateCertificateTemplateRef = (templateUrl, {
@@ -171,4 +214,47 @@ export const validateCertificateTemplateRef = (templateUrl, {
 
   assertTemplateRefBelongsToEvent(value, eventId, { allowLegacyGlobalTemplateRef });
   return value;
+};
+
+export const validateCertificateFontRef = (fontRef, { eventId } = {}) => {
+  if (!fontRef) return null;
+  const value = parseRequiredString(fontRef, 'fontRef');
+
+  if (isR2TemplateRef(value)) {
+    assertFontRefBelongsToEvent(value, eventId);
+    return value;
+  }
+
+  if (value.startsWith('http://') || value.startsWith('https://')) {
+    let parsed;
+    try {
+      parsed = new URL(value);
+    } catch {
+      throw badRequest('Certificate font URL is invalid');
+    }
+
+    if (parsed.hostname === 'res.cloudinary.com' || parsed.hostname.endsWith('.cloudinary.com')) {
+      assertFontRefBelongsToEvent(value, eventId);
+      return value;
+    }
+
+    throw badRequest('Remote certificate fonts must be uploaded through Occasio storage');
+  }
+
+  try {
+    resolveLocalUploadPath(value, { allowedExtensions: ['.ttf', '.otf'] });
+  } catch {
+    throw badRequest('Certificate font path is invalid');
+  }
+
+  assertFontRefBelongsToEvent(value, eventId);
+  return value;
+};
+
+export const validateCertificateMappingFontRefs = (mapping, { eventId } = {}) => {
+  if (!Array.isArray(mapping)) return mapping;
+  return mapping.map((field) => ({
+    ...field,
+    fontRef: field?.fontRef ? validateCertificateFontRef(field.fontRef, { eventId }) : field?.fontRef,
+  }));
 };

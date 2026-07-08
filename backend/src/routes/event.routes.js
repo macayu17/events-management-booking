@@ -42,6 +42,7 @@ router.get('/', async (req, res) => {
         category: true,
         tags: true,
         posterUrl: true,
+        featured: true,
         createdAt: true,
         organizer: {
           select: {
@@ -57,7 +58,7 @@ router.get('/', async (req, res) => {
           }
         }
       },
-      orderBy: { startTime: 'asc' }
+      orderBy: [{ featured: 'desc' }, { startTime: 'asc' }]
     });
 
     res.json(events);

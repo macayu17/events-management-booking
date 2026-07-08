@@ -25,6 +25,25 @@ const AVAILABLE_FIELDS = [
   { id: 'qrCode', label: 'Verification QR', icon: Type },
 ];
 
+const CERTIFICATE_FONT_OPTIONS = [
+  { value: 'Helvetica', label: 'Helvetica', group: 'Sans serif', cssFamily: 'Helvetica, Arial, sans-serif' },
+  { value: 'Helvetica Bold', label: 'Helvetica Bold', group: 'Sans serif', cssFamily: 'Helvetica, Arial, sans-serif', bold: true },
+  { value: 'Helvetica Oblique', label: 'Helvetica Oblique', group: 'Sans serif', cssFamily: 'Helvetica, Arial, sans-serif', italic: true },
+  { value: 'Helvetica Bold Oblique', label: 'Helvetica Bold Oblique', group: 'Sans serif', cssFamily: 'Helvetica, Arial, sans-serif', bold: true, italic: true },
+  { value: 'Times-Roman', label: 'Times Roman', group: 'Serif', cssFamily: '"Times New Roman", Times, serif' },
+  { value: 'Times Bold', label: 'Times Bold', group: 'Serif', cssFamily: '"Times New Roman", Times, serif', bold: true },
+  { value: 'Times Italic', label: 'Times Italic', group: 'Serif', cssFamily: '"Times New Roman", Times, serif', italic: true },
+  { value: 'Times Bold Italic', label: 'Times Bold Italic', group: 'Serif', cssFamily: '"Times New Roman", Times, serif', bold: true, italic: true },
+  { value: 'Courier', label: 'Courier', group: 'Monospace', cssFamily: '"Courier New", Courier, monospace' },
+  { value: 'Courier Bold', label: 'Courier Bold', group: 'Monospace', cssFamily: '"Courier New", Courier, monospace', bold: true },
+  { value: 'Courier Oblique', label: 'Courier Oblique', group: 'Monospace', cssFamily: '"Courier New", Courier, monospace', italic: true },
+  { value: 'Courier Bold Oblique', label: 'Courier Bold Oblique', group: 'Monospace', cssFamily: '"Courier New", Courier, monospace', bold: true, italic: true },
+  { value: 'Symbol', label: 'Symbol', group: 'Symbol', cssFamily: 'Symbol, serif' },
+  { value: 'Zapf Dingbats', label: 'Zapf Dingbats', group: 'Symbol', cssFamily: '"Zapf Dingbats", serif' },
+];
+
+const CERTIFICATE_FONT_GROUPS = [...new Set(CERTIFICATE_FONT_OPTIONS.map((font) => font.group))];
+
 const PREVIEW_BASE_WIDTH = 820;
 const MIN_PREVIEW_ZOOM = 0.3;
 const MAX_PREVIEW_ZOOM = 1.6;
@@ -32,6 +51,19 @@ const PREVIEW_ZOOM_STEP = 0.1;
 
 const clampPreviewZoom = (value) => Math.min(MAX_PREVIEW_ZOOM, Math.max(MIN_PREVIEW_ZOOM, Number(value.toFixed(2))));
 const clampUnit = (value) => Math.min(1, Math.max(0, Number(value)));
+const getBuiltInFontOption = (value) => CERTIFICATE_FONT_OPTIONS.find((font) => font.value === value) || CERTIFICATE_FONT_OPTIONS[0];
+const hashFontRef = (value) => {
+  let hash = 0;
+  for (const char of String(value || '')) hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;
+  return Math.abs(hash).toString(36);
+};
+const createCustomFontFamily = (fontRef) => `OccasioCustomFont-${hashFontRef(fontRef)}`;
+const getFontSourceUrl = (fontRef) => {
+  if (!fontRef) return null;
+  if (fontRef.startsWith('/uploads/')) return `${BACKEND_URL}${fontRef}`;
+  if (fontRef.startsWith('http://') || fontRef.startsWith('https://')) return fontRef;
+  return null;
+};
 
 export default function CertificateDesigner({ eventId, initialConfig, onSave }) {
   // Active certificate type tab
@@ -49,11 +81,16 @@ export default function CertificateDesigner({ eventId, initialConfig, onSave }) 
   const [sendingType, setSendingType] = useState('participation');
   const [previewMode, setPreviewMode] = useState('fit');
   const [previewZoom, setPreviewZoom] = useState(1);
+  const [uploadingFont, setUploadingFont] = useState(false);
+  const [customFonts, setCustomFonts] = useState([]);
 
   const containerRef = useRef(null);
   const fileInputRef = useRef(null);
+  const fontInputRef = useRef(null);
   const previewScrollRef = useRef(null);
   const sendCloseButtonRef = useRef(null);
+  const customFontRefs = useRef(new Set());
+  const customFontBlobUrls = useRef(new Set());
 
   // Current active config helpers
   const activeConfig = configs[activeCertType] || { pdfData: null, templateUrl: null, mapping: [] };
@@ -62,6 +99,46 @@ export default function CertificateDesigner({ eventId, initialConfig, onSave }) 
     setSendModalOpen(false);
     setSendEmails('');
   }, []);
+
+  const registerCustomFont = useCallback(({ fontRef, name, sourceUrl }) => {
+    if (!fontRef || customFontRefs.current.has(fontRef)) {
+      return customFonts.find((font) => font.fontRef === fontRef);
+    }
+
+    const fontFamily = createCustomFontFamily(fontRef);
+    const fontRecord = {
+      fontRef,
+      name: name || 'Custom font',
+      fontFamily,
+      sourceUrl: sourceUrl || getFontSourceUrl(fontRef),
+    };
+
+    customFontRefs.current.add(fontRef);
+    setCustomFonts(prev => [...prev, fontRecord]);
+
+    if (fontRecord.sourceUrl && typeof FontFace !== 'undefined' && document?.fonts) {
+      const fontFace = new FontFace(fontFamily, `url("${fontRecord.sourceUrl}")`);
+      fontFace.load()
+        .then((loadedFont) => document.fonts.add(loadedFont))
+        .catch((error) => console.warn('Failed to load certificate preview font:', error));
+    }
+
+    return fontRecord;
+  }, [customFonts]);
+
+  const getMappingFontFamily = (mapping) => {
+    if (mapping?.fontRef) {
+      return customFonts.find((font) => font.fontRef === mapping.fontRef)?.fontFamily || getBuiltInFontOption(mapping.font).cssFamily;
+    }
+    return getBuiltInFontOption(mapping?.font).cssFamily;
+  };
+
+const getMappingFontStyle = (mapping) => (
+  getBuiltInFontOption(mapping?.font).italic && !mapping?.fontRef ? 'italic' : 'normal'
+);
+const getMappingFontWeight = (mapping) => (
+  mapping?.bold || (getBuiltInFontOption(mapping?.font).bold && !mapping?.fontRef) ? 800 : 500
+);
 
   const updateActiveConfig = (updates) => {
     setConfigs(prev => ({
@@ -83,10 +160,28 @@ export default function CertificateDesigner({ eventId, initialConfig, onSave }) 
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  useEffect(() => () => {
+    customFontBlobUrls.current.forEach((url) => URL.revokeObjectURL(url));
+    customFontBlobUrls.current.clear();
+  }, []);
+
   // Load existing certificate configs from backend
   useEffect(() => {
     loadCertificateConfigs();
   }, [eventId]);
+
+  useEffect(() => {
+    Object.values(configs).forEach((config) => {
+      (config.mapping || []).forEach((field) => {
+        if (field.fontRef) {
+          registerCustomFont({
+            fontRef: field.fontRef,
+            name: field.fontLabel || field.font || 'Custom font',
+          });
+        }
+      });
+    });
+  }, [configs, registerCustomFont]);
 
   const loadCertificateConfigs = async () => {
     try {
@@ -236,6 +331,76 @@ export default function CertificateDesigner({ eventId, initialConfig, onSave }) 
     }
   };
 
+  const handleFontUpload = async (event) => {
+    const selectedFile = event.target.files[0];
+    if (!selectedFile) return;
+
+    const fileName = selectedFile.name || '';
+    const isSupportedFont = /\.(ttf|otf)$/i.test(fileName);
+    if (!isSupportedFont) {
+      toast.error('Upload a .ttf or .otf font file');
+      if (fontInputRef.current) fontInputRef.current.value = '';
+      return;
+    }
+
+    setUploadingFont(true);
+    const previewUrl = URL.createObjectURL(selectedFile);
+    customFontBlobUrls.current.add(previewUrl);
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+
+    try {
+      const response = await api.post(`/admin/events/${eventId}/certificates/fonts/upload`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+
+      const fontRef = response.data.url;
+      if (!fontRef) {
+        throw new Error('Font upload did not return a saved URL');
+      }
+
+      const fontName = response.data.name || fileName.replace(/\.(ttf|otf)$/i, '').replace(/[-_]+/g, ' ');
+      const fontRecord = registerCustomFont({ fontRef, name: fontName, sourceUrl: previewUrl });
+
+      if (selectedMapping) {
+        updateFieldMapping(selectedMapping.fieldId, {
+          font: `custom:${fontRef}`,
+          fontRef,
+          fontLabel: fontRecord?.name || fontName,
+        });
+      }
+
+      toast.success(selectedMapping ? `Font applied to ${getFieldName(selectedMapping.fieldId)}` : 'Font uploaded');
+    } catch (error) {
+      console.error('Font upload error:', error);
+      URL.revokeObjectURL(previewUrl);
+      customFontBlobUrls.current.delete(previewUrl);
+      toast.error(error.response?.data?.error || error.message || 'Font upload failed');
+    } finally {
+      setUploadingFont(false);
+      if (fontInputRef.current) fontInputRef.current.value = '';
+    }
+  };
+
+  const handleFontSelect = (fieldId, value) => {
+    if (value.startsWith('custom:')) {
+      const fontRef = value.slice('custom:'.length);
+      const fontRecord = customFonts.find((font) => font.fontRef === fontRef);
+      updateFieldMapping(fieldId, {
+        font: value,
+        fontRef,
+        fontLabel: fontRecord?.name || 'Custom font',
+      });
+      return;
+    }
+
+    updateFieldMapping(fieldId, {
+      font: value,
+      fontRef: null,
+      fontLabel: null,
+    });
+  };
+
   const placeSelectedField = (x, y) => {
     if (!selectedFieldId) {
       toast.error('Please select a field first');
@@ -254,7 +419,9 @@ export default function CertificateDesigner({ eventId, initialConfig, onSave }) 
       fontSize: 14,
       color: '#000000',
       bold: selectedFieldId === 'userName' || selectedFieldId === 'rank',
-      font: 'Helvetica'
+      font: 'Helvetica',
+      fontRef: null,
+      fontLabel: null
     });
 
     updateActiveConfig({ mapping: newMapping });
@@ -519,6 +686,14 @@ export default function CertificateDesigner({ eventId, initialConfig, onSave }) 
             onChange={handleFileUpload}
             disabled={uploading}
           />
+          <input
+            ref={fontInputRef}
+            type="file"
+            accept=".ttf,.otf,font/ttf,font/otf,application/font-sfnt"
+            className="sr-only"
+            onChange={handleFontUpload}
+            disabled={uploadingFont}
+          />
           <button
             type="button"
             onClick={handleTestCertificate}
@@ -733,15 +908,29 @@ export default function CertificateDesigner({ eventId, initialConfig, onSave }) 
 
                 <div className="grid grid-cols-[1fr_auto] gap-3">
                   <label className="block">
-                    <span className="mb-2 block text-xs font-bold uppercase tracking-[0.14em] text-[#8f867d]">Font</span>
+                    <span className="mb-2 flex items-center justify-between text-xs font-bold uppercase tracking-[0.14em] text-[#8f867d]">
+                      Font
+                      <span className="tracking-normal text-[#d9d0c6]">{CERTIFICATE_FONT_OPTIONS.length + customFonts.length}</span>
+                    </span>
                     <select
-                      value={selectedMapping.font || 'Helvetica'}
-                      onChange={(event) => updateFieldMapping(selectedMapping.fieldId, { font: event.target.value })}
+                      value={selectedMapping.fontRef ? `custom:${selectedMapping.fontRef}` : selectedMapping.font || 'Helvetica'}
+                      onChange={(event) => handleFontSelect(selectedMapping.fieldId, event.target.value)}
                       className="input py-2 text-sm"
                     >
-                      <option value="Helvetica">Helvetica</option>
-                      <option value="Times-Roman">Times</option>
-                      <option value="Courier">Courier</option>
+                      {CERTIFICATE_FONT_GROUPS.map((group) => (
+                        <optgroup key={group} label={group}>
+                          {CERTIFICATE_FONT_OPTIONS.filter((font) => font.group === group).map((font) => (
+                            <option key={font.value} value={font.value}>{font.label}</option>
+                          ))}
+                        </optgroup>
+                      ))}
+                      {customFonts.length > 0 && (
+                        <optgroup label="Uploaded">
+                          {customFonts.map((font) => (
+                            <option key={font.fontRef} value={`custom:${font.fontRef}`}>{font.name}</option>
+                          ))}
+                        </optgroup>
+                      )}
                     </select>
                   </label>
                   <label className="block">
@@ -754,6 +943,16 @@ export default function CertificateDesigner({ eventId, initialConfig, onSave }) 
                     />
                   </label>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() => fontInputRef.current?.click()}
+                  disabled={uploadingFont}
+                  className="flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-sm font-bold text-[#f7efe3] transition-colors hover:border-[#f2e7d8]/25 hover:bg-white/[0.08] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#E23744] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <Upload size={15} />
+                  {uploadingFont ? 'Uploading font...' : 'Upload font'}
+                </button>
 
                 <label className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.035] px-3 py-2.5 text-sm font-bold text-[#d9d0c6]">
                   Bold text
@@ -972,8 +1171,9 @@ export default function CertificateDesigner({ eventId, initialConfig, onSave }) 
                       top: `${m.y * 100}%`,
                       color: isQr ? '#111111' : (m.color || '#111111'),
                       fontSize: isQr ? '12px' : `${m.fontSize || 14}px`,
-                      fontFamily: m.font || 'Helvetica',
-                      fontWeight: m.bold ? 800 : 500,
+                      fontFamily: getMappingFontFamily(m),
+                      fontStyle: getMappingFontStyle(m),
+                      fontWeight: getMappingFontWeight(m),
                     }}
                     aria-label={`Edit ${getFieldName(m.fieldId)} placement`}
                   >

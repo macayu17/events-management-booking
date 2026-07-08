@@ -72,6 +72,7 @@ test('admin certificate routes stay mounted behind shared admin auth middleware'
     [
       'POST /upload',
       'POST /events/:id/certificates/upload',
+      'POST /events/:id/certificates/fonts/upload',
       'POST /events/:id/certificates/test',
       'PUT /events/:id/certificates/config',
       'GET /events/:id/certificates/config',
@@ -85,6 +86,7 @@ test('upload routes verify event access before multer storage runs', () => {
   const details = flattenRouteDetails(adminRoutes);
   const legacyCertificateUpload = details.find((route) => route.method === 'POST' && route.path === '/upload');
   const certificateUpload = details.find((route) => route.method === 'POST' && route.path === '/events/:id/certificates/upload');
+  const certificateFontUpload = details.find((route) => route.method === 'POST' && route.path === '/events/:id/certificates/fonts/upload');
   const certificatePreview = details.find((route) => route.method === 'POST' && route.path === '/events/:id/certificates/test');
   const posterUpload = details.find((route) => route.method === 'POST' && route.path === '/events/:id/poster-upload');
 
@@ -93,6 +95,11 @@ test('upload routes verify event access before multer storage runs', () => {
     'requireCertificateUploadAccess',
     'multerMiddleware',
     'handleCertificateTemplateUpload',
+  ]);
+  assert.deepEqual(certificateFontUpload?.stack, [
+    'requireCertificateUploadAccess',
+    'multerMiddleware',
+    'handleCertificateFontUpload',
   ]);
   assert.deepEqual(certificatePreview?.stack, [
     'requireCertificatePreviewAccess',

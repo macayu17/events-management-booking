@@ -63,6 +63,7 @@ model Event {
   tags        String[]      @default([])
   posterUrl   String?       @map("poster_url")
   published   Boolean       @default(false)
+  featured    Boolean       @default(false)
 
   // Ticket styling options (JSON: template, primaryColor, accentColor, logoUrl)
   ticketStyle Json? @map("ticket_style")

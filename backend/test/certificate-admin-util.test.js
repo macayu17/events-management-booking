@@ -2,11 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   CERTIFICATE_ACCESS_ROLES,
+  getCertificateFontStoragePrefix,
   getCertificateTemplateStoragePrefix,
   isCertificateConfigEnabled,
+  isCertificateFontRefScopedToEvent,
   isCertificateTemplateRefScopedToEvent,
   normalizeCertificateEnabled,
   normalizeCertificateType,
+  validateCertificateFontRef,
   validateCertificateTemplateRef
 } from '../src/utils/certificate-admin.util.js';
 
@@ -75,6 +78,44 @@ test('certificate template refs can be scoped to a specific event', () => {
     assert.equal(isCertificateTemplateRefScopedToEvent(localRef, eventId), true);
     assert.equal(isCertificateTemplateRefScopedToEvent(r2Ref, eventId), true);
     assert.equal(isCertificateTemplateRefScopedToEvent(cloudinaryRef, eventId), true);
+  } finally {
+    if (originalBucket === undefined) delete process.env.R2_BUCKET;
+    else process.env.R2_BUCKET = originalBucket;
+  }
+});
+
+test('certificate font refs accept event-scoped ttf and otf uploads only', () => {
+  const originalBucket = process.env.R2_BUCKET;
+  process.env.R2_BUCKET = 'occasio-test';
+  const eventId = 'event-123';
+
+  try {
+    assert.equal(getCertificateFontStoragePrefix(eventId), 'certificates/fonts/event-123');
+
+    const localRef = '/uploads/certificates/fonts/event-123/custom-heading.ttf';
+    const localOtfRef = '/uploads/certificates/fonts/event-123/custom-serif.otf';
+    const r2Ref = 'r2://occasio-test/certificates/fonts/event-123/custom-heading.ttf';
+    const cloudinaryRef = 'https://res.cloudinary.com/demo/raw/authenticated/v123/occasio/certificates/fonts/event-123/custom-heading.otf';
+
+    assert.equal(validateCertificateFontRef(localRef, { eventId }), localRef);
+    assert.equal(validateCertificateFontRef(localOtfRef, { eventId }), localOtfRef);
+    assert.equal(validateCertificateFontRef(r2Ref, { eventId }), r2Ref);
+    assert.equal(validateCertificateFontRef(cloudinaryRef, { eventId }), cloudinaryRef);
+    assert.equal(isCertificateFontRefScopedToEvent(localRef, eventId), true);
+    assert.equal(isCertificateFontRefScopedToEvent(cloudinaryRef, eventId), true);
+
+    assert.throws(
+      () => validateCertificateFontRef('/uploads/certificates/fonts/event-999/custom.ttf', { eventId }),
+      /Certificate font does not belong to this event/
+    );
+    assert.throws(
+      () => validateCertificateFontRef('/uploads/certificates/fonts/event-123/custom.pdf', { eventId }),
+      /Certificate font path is invalid/
+    );
+    assert.throws(
+      () => validateCertificateFontRef('https://example.com/custom.ttf', { eventId }),
+      /Remote certificate fonts/
+    );
   } finally {
     if (originalBucket === undefined) delete process.env.R2_BUCKET;
     else process.env.R2_BUCKET = originalBucket;

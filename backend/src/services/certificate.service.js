@@ -1,9 +1,12 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import fontkit from '@pdf-lib/fontkit';
 import QRCode from 'qrcode';
 import fs from 'fs';
 import { downloadCloudinaryBuffer } from '../utils/cloudinary.util.js';
 import { getR2ObjectBuffer, isR2TemplateRef } from '../utils/r2.util.js';
 import { resolveLocalUploadPath } from '../utils/local-upload-path.util.js';
+
+const CUSTOM_FONT_STORAGE_PREFIX = 'certificates/fonts/';
 
 // Certificate types
 export const CERTIFICATE_TYPES = {
@@ -58,6 +61,32 @@ async function fetchTemplateBytes(templateUrl) {
 
   if (!fs.existsSync(localPath)) {
     throw new Error(`Template file not found at: ${localPath}`);
+  }
+
+  return fs.readFileSync(localPath);
+}
+
+async function fetchCustomFontBytes(fontRef) {
+  if (!fontRef) return null;
+
+  if (isR2TemplateRef(fontRef)) {
+    return getR2ObjectBuffer(fontRef, { allowedPrefixes: [CUSTOM_FONT_STORAGE_PREFIX] });
+  }
+
+  if (fontRef.startsWith('http://') || fontRef.startsWith('https://')) {
+    if (fontRef.includes('cloudinary.com')) {
+      const buffer = await downloadCloudinaryBuffer(fontRef);
+      if (buffer) return buffer;
+      throw new Error('Failed to download custom font from Cloudinary');
+    }
+
+    throw new Error('Remote certificate fonts must be uploaded through Occasio storage');
+  }
+
+  const localPath = resolveLocalUploadPath(fontRef, { allowedExtensions: ['.ttf', '.otf'] });
+
+  if (!fs.existsSync(localPath)) {
+    throw new Error(`Font file not found at: ${localPath}`);
   }
 
   return fs.readFileSync(localPath);
@@ -138,21 +167,85 @@ function parseColor(hexColor) {
   return rgb(r, g, b);
 }
 
-const STANDARD_FONT_BY_NAME = {
-  Helvetica: StandardFonts.Helvetica,
-  'Times-Roman': StandardFonts.TimesRoman,
-  Courier: StandardFonts.Courier,
-};
+export const CERTIFICATE_STANDARD_FONTS = [
+  'Helvetica',
+  'Helvetica Bold',
+  'Helvetica Oblique',
+  'Helvetica Bold Oblique',
+  'Times-Roman',
+  'Times Bold',
+  'Times Italic',
+  'Times Bold Italic',
+  'Courier',
+  'Courier Bold',
+  'Courier Oblique',
+  'Courier Bold Oblique',
+  'Symbol',
+  'Zapf Dingbats',
+];
 
-const STANDARD_BOLD_FONT_BY_NAME = {
-  Helvetica: StandardFonts.HelveticaBold,
-  'Times-Roman': StandardFonts.TimesRomanBold,
-  Courier: StandardFonts.CourierBold,
+const STANDARD_FONT_BY_NAME = {
+  Helvetica: {
+    regular: StandardFonts.Helvetica,
+    bold: StandardFonts.HelveticaBold,
+  },
+  'Helvetica Bold': {
+    regular: StandardFonts.HelveticaBold,
+    bold: StandardFonts.HelveticaBold,
+  },
+  'Helvetica Oblique': {
+    regular: StandardFonts.HelveticaOblique,
+    bold: StandardFonts.HelveticaBoldOblique,
+  },
+  'Helvetica Bold Oblique': {
+    regular: StandardFonts.HelveticaBoldOblique,
+    bold: StandardFonts.HelveticaBoldOblique,
+  },
+  'Times-Roman': {
+    regular: StandardFonts.TimesRoman,
+    bold: StandardFonts.TimesRomanBold,
+  },
+  'Times Bold': {
+    regular: StandardFonts.TimesRomanBold,
+    bold: StandardFonts.TimesRomanBold,
+  },
+  'Times Italic': {
+    regular: StandardFonts.TimesRomanItalic,
+    bold: StandardFonts.TimesRomanBoldItalic,
+  },
+  'Times Bold Italic': {
+    regular: StandardFonts.TimesRomanBoldItalic,
+    bold: StandardFonts.TimesRomanBoldItalic,
+  },
+  Courier: {
+    regular: StandardFonts.Courier,
+    bold: StandardFonts.CourierBold,
+  },
+  'Courier Bold': {
+    regular: StandardFonts.CourierBold,
+    bold: StandardFonts.CourierBold,
+  },
+  'Courier Oblique': {
+    regular: StandardFonts.CourierOblique,
+    bold: StandardFonts.CourierBoldOblique,
+  },
+  'Courier Bold Oblique': {
+    regular: StandardFonts.CourierBoldOblique,
+    bold: StandardFonts.CourierBoldOblique,
+  },
+  Symbol: {
+    regular: StandardFonts.Symbol,
+    bold: StandardFonts.Symbol,
+  },
+  'Zapf Dingbats': {
+    regular: StandardFonts.ZapfDingbats,
+    bold: StandardFonts.ZapfDingbats,
+  },
 };
 
 const getFontName = (font = 'Helvetica', bold = false) => {
-  const source = bold ? STANDARD_BOLD_FONT_BY_NAME : STANDARD_FONT_BY_NAME;
-  return source[font] || source.Helvetica;
+  const selected = STANDARD_FONT_BY_NAME[font] || STANDARD_FONT_BY_NAME.Helvetica;
+  return selected[bold ? 'bold' : 'regular'] || selected.regular || STANDARD_FONT_BY_NAME.Helvetica.regular;
 };
 
 /**
@@ -170,7 +263,20 @@ export const generateCertificate = async (templateUrl, mapping, data) => {
     // 2. Load PDF
     const pdfDoc = await PDFDocument.load(existingPdfBytes);
     const embeddedFonts = new Map();
-    const getEmbeddedFont = async (fontName, bold) => {
+    let hasRegisteredFontkit = false;
+    const getEmbeddedFont = async ({ fontName, bold, fontRef }) => {
+      if (fontRef) {
+        const cacheKey = `custom:${fontRef}`;
+        if (!embeddedFonts.has(cacheKey)) {
+          if (!hasRegisteredFontkit) {
+            pdfDoc.registerFontkit(fontkit);
+            hasRegisteredFontkit = true;
+          }
+          embeddedFonts.set(cacheKey, await pdfDoc.embedFont(await fetchCustomFontBytes(fontRef), { subset: true }));
+        }
+        return embeddedFonts.get(cacheKey);
+      }
+
       const standardFontName = getFontName(fontName, bold);
       if (!embeddedFonts.has(standardFontName)) {
         embeddedFonts.set(standardFontName, await pdfDoc.embedFont(standardFontName));
@@ -183,7 +289,7 @@ export const generateCertificate = async (templateUrl, mapping, data) => {
 
     // 3. Draw fields
     for (const field of normalizeCertificateMapping(mapping)) {
-      const { fieldId, x, y, fontSize = 12, color = '#000000', bold = false, font: fontName = 'Helvetica' } = field;
+      const { fieldId, x, y, fontSize = 12, color = '#000000', bold = false, font: fontName = 'Helvetica', fontRef } = field;
 
       const text = resolveFieldValue(fieldId, data);
       if (!text) continue;
@@ -206,12 +312,16 @@ export const generateCertificate = async (templateUrl, mapping, data) => {
         continue;
       }
 
-      const selectedFont = await getEmbeddedFont(fontName, bold);
+      const selectedFont = await getEmbeddedFont({ fontName, bold, fontRef });
       const textWidth = selectedFont.widthOfTextAtSize(text, fontSize);
 
+      // The designer preview centers each field on its (x, y) point (both axes).
+      // drawText's y is the text baseline, so to match the preview we offset the
+      // baseline down by ~half the cap height instead of anchoring the baseline
+      // on the point (which rendered text too high). Cap height ≈ 0.7·fontSize.
       firstPage.drawText(text, {
         x: (x * width) - (textWidth / 2), // Center text on the placement point
-        y: (1 - y) * height,
+        y: (1 - y) * height - (fontSize * 0.35),
         size: fontSize,
         font: selectedFont,
         color: parseColor(color),

@@ -157,3 +157,14 @@ test('ticket renderer keeps source checks independent of the test working direct
   assert.match(source, /TICKET_IMAGE_TIMEOUT_MS\s*=\s*2000/);
   assert.match(source, /ticketImageCache/);
 });
+
+test('certificate renderer can embed uploaded custom font refs', () => {
+  const source = fs.readFileSync(path.resolve(__dirname, '../src/services/certificate.service.js'), 'utf8');
+
+  assert.match(source, /@pdf-lib\/fontkit/);
+  assert.match(source, /registerFontkit\(fontkit\)/);
+  assert.match(source, /Helvetica Bold Oblique/);
+  assert.match(source, /Courier Bold Oblique/);
+  assert.match(source, /fontRef/);
+  assert.match(source, /certificates\/fonts/);
+});

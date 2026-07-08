@@ -19,6 +19,7 @@
     "html5-qrcode": "^2.3.8",
     "lucide-react": "^0.294.0",
     "pdfjs-dist": "5.4.296",
+    "qrcode": "^1.5.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-hook-form": "^7.49.2",

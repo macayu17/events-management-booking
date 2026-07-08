@@ -119,6 +119,34 @@ export const uploadPublicPdfToCloudinary = (pdfBuffer, folder = 'certificates') 
     });
 };
 
+export const uploadRawToCloudinary = (fileBuffer, folder = 'certificates', format) => {
+    return new Promise((resolve, reject) => {
+        const uploadStream = cloudinary.uploader.upload_stream(
+            {
+                folder: `occasio/${folder}`,
+                resource_type: 'raw',
+                ...(format ? { format } : {}),
+                type: 'authenticated',
+            },
+            (error, result) => {
+                if (error) {
+                    reject(error);
+                } else {
+                    const signedUrl = cloudinary.url(result.public_id, {
+                        resource_type: 'raw',
+                        type: 'authenticated',
+                        sign_url: true,
+                        expires_at: Math.floor(Date.now() / 1000) + (2 * 365 * 24 * 60 * 60)
+                    });
+                    resolve(signedUrl);
+                }
+            }
+        );
+
+        uploadStream.end(fileBuffer);
+    });
+};
+
 /**
 /**
  * Extract the public_id and delivery type from a Cloudinary raw URL.

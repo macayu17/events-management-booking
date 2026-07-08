@@ -3,12 +3,33 @@
 @tailwind utilities;
 
 @layer base {
+  /* ===== Ticket-stub design tokens (light default) ===== */
+  :root {
+    --bg: #f4efe4; --card: #fffdf7; --card2: #fbf8f0;
+    --ink: #1c1712; --ink70: rgba(28,23,18,0.7); --ink55: rgba(28,23,18,0.55); --ink45: rgba(28,23,18,0.45);
+    --line: #1c1712; --line60: rgba(28,23,18,0.45); --line20: rgba(28,23,18,0.18); --dash: rgba(28,23,18,0.4);
+    --accent: oklch(0.55 0.19 25); --on-accent: #ffffff; --amber: #ffb52e;
+    --hot-bg: #b3261e; --hot-ink: #ffffff; --warn-bg: #1c1712; --warn-ink: #ffb52e;
+    --shadow: rgba(28,23,18,0.9); --stripe: rgba(28,23,18,0.06); --ph: #ece5d2;
+  }
+  /* ThemeContext toggles `.dark` on <html> */
+  html.dark {
+    --bg: #151016; --card: #1e1720; --card2: rgba(240,234,234,0.05);
+    --ink: #f0eaea; --ink70: rgba(240,234,234,0.72); --ink55: rgba(240,234,234,0.55); --ink45: rgba(240,234,234,0.45);
+    --line: rgba(240,234,234,0.45); --line60: rgba(240,234,234,0.35); --line20: rgba(240,234,234,0.14); --dash: rgba(240,234,234,0.35);
+    --accent: oklch(0.7 0.19 25); --on-accent: #151016; --amber: #ffb52e;
+    --hot-bg: #ffb52e; --hot-ink: #151016; --warn-bg: #ffb52e; --warn-ink: #151016;
+    --shadow: rgba(240,234,234,0.16); --stripe: rgba(240,234,234,0.06); --ph: #292130;
+  }
+
   body {
-    /* Premium Dark Theme Base with Outfit Font */
-    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    @apply bg-[#09090b] text-[#fafafa] antialiased;
+    font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    @apply antialiased;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    transition: background-color .25s ease, color .25s ease;
   }
 
   /* Custom Scrollbar for Dark Theme */
@@ -26,6 +47,73 @@
 }
 
 @layer components {
+
+  /* ===== Ticket-stub design system ===== */
+  /* Small monospace label/eyebrow used across the design */
+  .mono-label {
+    font-family: 'IBM Plex Mono', monospace;
+    @apply text-[0.66rem] font-semibold uppercase tracking-[0.18em] text-ink-45;
+  }
+  .mono-accent { font-family: 'IBM Plex Mono', monospace; @apply text-[0.7rem] font-semibold uppercase tracking-[0.16em] text-accent; }
+
+  /* Ticket card: hard shadow + solid border */
+  .ticket-card {
+    background: var(--card);
+    border: 2px solid var(--line);
+    box-shadow: 5px 5px 0 var(--shadow);
+    @apply rounded-xl transition-transform;
+  }
+  .ticket-card-sm {
+    background: var(--card);
+    border: 1.5px solid var(--line);
+    @apply rounded-[10px] transition-shadow;
+  }
+  .ticket-card-sm:hover { box-shadow: 4px 4px 0 var(--shadow); }
+
+  /* Perforated stub divider (vertical) with punched notches */
+  .ticket-stub { position: relative; border-left: 2px dashed var(--dash); }
+  .ticket-notch {
+    position: absolute; width: 18px; height: 18px; border-radius: 50%;
+    background: var(--bg); border: 2px solid var(--line);
+  }
+
+  /* Barcode strip */
+  .barcode {
+    background: repeating-linear-gradient(90deg, var(--ink) 0 2px, transparent 2px 5px);
+  }
+  .barcode-2d {
+    background:
+      repeating-linear-gradient(90deg, var(--ink) 0 4px, transparent 4px 8px),
+      repeating-linear-gradient(0deg, var(--ink) 0 4px, transparent 4px 9px);
+  }
+
+  /* Status chips */
+  .tchip { font-family: 'IBM Plex Mono', monospace; @apply inline-flex items-center rounded-[3px] px-2 py-1 text-[0.5rem] font-bold uppercase tracking-[0.12em]; }
+  .tchip-hot  { background: var(--hot-bg);  color: var(--hot-ink); }
+  .tchip-warn { background: var(--warn-bg); color: var(--warn-ink); }
+  .tchip-ok   { border: 1px solid var(--line60); color: var(--ink); }
+
+  /* Buttons */
+  .btn-accent {
+    background: var(--accent); color: var(--on-accent);
+    @apply rounded-md px-6 py-3 text-center text-sm font-bold transition-opacity hover:opacity-[0.88] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent;
+  }
+  .btn-ink {
+    background: var(--ink); color: var(--bg);
+    @apply rounded-md px-6 py-3 text-center text-sm font-bold transition-opacity hover:opacity-90;
+  }
+  .btn-outline {
+    border: 2px solid var(--line60); color: var(--ink);
+    @apply rounded-md px-5 py-2.5 text-center text-sm font-bold transition-colors hover:border-accent hover:text-accent;
+  }
+
+  /* Form field */
+  .field {
+    background: var(--card2); color: var(--ink);
+    border: 1.5px solid var(--line20);
+    @apply w-full rounded-md px-3.5 py-3 text-sm outline-none transition-colors placeholder:text-ink-45;
+  }
+  .field:focus { border-color: var(--accent); }
 
   /* Minimal Button System */
   .btn {
@@ -79,13 +167,21 @@
     @apply bg-white/5 text-gray-400 border border-white/5;
   }
 
+  /* Admin is always a dark "control room" — force the dark token set inside it
+     regardless of the site theme, so ticket-token components and the existing
+     dark inline colors both read correctly. */
   .admin-shell {
+    --bg: #151016; --card: #1e1720; --card2: rgba(240,234,234,0.05);
+    --ink: #f0eaea; --ink70: rgba(240,234,234,0.72); --ink55: rgba(240,234,234,0.55); --ink45: rgba(240,234,234,0.45);
+    --line: rgba(240,234,234,0.45); --line60: rgba(240,234,234,0.35); --line20: rgba(240,234,234,0.14); --dash: rgba(240,234,234,0.35);
+    --accent: oklch(0.7 0.19 25); --on-accent: #151016;
+    --hot-bg: #ffb52e; --hot-ink: #151016; --warn-bg: #ffb52e; --warn-ink: #151016;
+    --shadow: rgba(240,234,234,0.16); --stripe: rgba(240,234,234,0.06); --ph: #292130;
     background:
       radial-gradient(circle at 18% 10%, rgba(226, 55, 68, 0.12), transparent 32rem),
       radial-gradient(circle at 82% 18%, rgba(226, 55, 68, 0.08), transparent 30rem),
       linear-gradient(135deg, #0b0a09 0%, #11100e 52%, #090909 100%);
     color: #f7efe3;
-    font-family: 'Outfit', ui-sans-serif, system-ui, sans-serif;
   }
 
   .admin-side-panel {

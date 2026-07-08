@@ -4,16 +4,19 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import prisma from '../config/db.js';
 import { checkEventAccess } from '../middleware/auth.middleware.js';
-import { uploadPdf } from '../middleware/upload.middleware.js';
-import { uploadPublicPdfToCloudinary, isCloudinaryConfigured } from '../utils/cloudinary.util.js';
+import { uploadFont, uploadPdf } from '../middleware/upload.middleware.js';
+import { uploadPublicPdfToCloudinary, uploadRawToCloudinary, isCloudinaryConfigured } from '../utils/cloudinary.util.js';
 import { getR2ObjectBuffer, isR2Configured, isR2TemplateRef, uploadBufferToR2 } from '../utils/r2.util.js';
 import { resolveLocalUploadPath } from '../utils/local-upload-path.util.js';
 import {
   CERTIFICATE_ACCESS_ROLES,
+  getCertificateFontStoragePrefix,
   getCertificateTemplateStoragePrefix,
   isCertificateConfigEnabled,
   normalizeCertificateEnabled,
   normalizeCertificateType,
+  validateCertificateFontRef,
+  validateCertificateMappingFontRefs,
   validateCertificateTemplateRef
 } from '../utils/certificate-admin.util.js';
 
@@ -173,6 +176,69 @@ const handleCertificateTemplateUpload = async (req, res) => {
   }
 };
 
+const getFontContentType = (ext) => (
+  ext === '.otf' ? 'font/otf' : 'font/ttf'
+);
+
+const handleCertificateFontUpload = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No font uploaded' });
+    }
+
+    const originalName = req.file.originalname || 'certificate-font.ttf';
+    const ext = path.extname(originalName).toLowerCase();
+    const safeExt = ext === '.otf' ? '.otf' : '.ttf';
+    const baseName = path.basename(originalName, ext)
+      .replace(/[^a-zA-Z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60) || 'certificate-font';
+    const generatedFileName = `${baseName}-${Date.now()}-${Math.round(Math.random() * 1e9)}${safeExt}`;
+    const fontStoragePrefix = getCertificateFontStoragePrefix(req.params.id);
+    let fileBuffer = req.file.buffer;
+    if (!fileBuffer && req.file.path && fs.existsSync(req.file.path)) {
+      fileBuffer = fs.readFileSync(req.file.path);
+    }
+
+    if (!fileBuffer) {
+      return res.status(500).json({ error: 'Uploaded font data is missing' });
+    }
+
+    let fileUrl;
+    if (isR2Configured()) {
+      const key = `${fontStoragePrefix}/${generatedFileName}`;
+      fileUrl = await uploadBufferToR2({
+        buffer: fileBuffer,
+        key,
+        contentType: getFontContentType(safeExt),
+      });
+    } else if (isCloudinaryConfigured()) {
+      fileUrl = await uploadRawToCloudinary(fileBuffer, fontStoragePrefix, safeExt.slice(1));
+    } else {
+      const fontUploadDir = path.join(__dirname, '../../uploads', fontStoragePrefix);
+      if (!fs.existsSync(fontUploadDir)) {
+        fs.mkdirSync(fontUploadDir, { recursive: true });
+      }
+
+      const destinationPath = path.join(fontUploadDir, generatedFileName);
+      fs.writeFileSync(destinationPath, fileBuffer);
+      fileUrl = `/uploads/${fontStoragePrefix}/${generatedFileName}`;
+    }
+
+    cleanupUploadedFile(req.file);
+
+    res.json({
+      url: validateCertificateFontRef(fileUrl, { eventId: req.params.id }),
+      name: baseName.replace(/[-_]+/g, ' '),
+    });
+  } catch (error) {
+    console.error('Font upload error:', error);
+    res.status(error.statusCode || 500).json({ error: error.message || 'Failed to upload font' });
+  } finally {
+    cleanupUploadedFile(req.file);
+  }
+};
+
 // Legacy unscoped upload route kept only to return a clear authenticated error.
 router.post('/upload', (req, res) => {
   res.status(410).json({ error: 'Certificate uploads must target an event. Use /admin/events/:id/certificates/upload.' });
@@ -180,6 +246,9 @@ router.post('/upload', (req, res) => {
 
 // Upload certificate template (PDF) after event access is verified.
 router.post('/events/:id/certificates/upload', requireCertificateUploadAccess, uploadPdf.single('file'), handleCertificateTemplateUpload);
+
+// Upload a custom certificate font after event access is verified.
+router.post('/events/:id/certificates/fonts/upload', requireCertificateUploadAccess, uploadFont.single('file'), handleCertificateFontUpload);
 
 
 // Test/Preview Certificate - generates a sample certificate with dummy data
@@ -252,7 +321,9 @@ router.post('/events/:id/certificates/test', requireCertificatePreviewAccess, ex
             selectedCertificateType === 'third_prize' ? '3rd Place' : ''
     };
 
-    const pdfBytes = await generateCertificate(finalTemplateUrl, finalMapping || [], sampleData);
+    finalMapping = validateCertificateMappingFontRefs(finalMapping || [], { eventId: id });
+
+    const pdfBytes = await generateCertificate(finalTemplateUrl, finalMapping, sampleData);
 
     // Return as PDF
     res.setHeader('Content-Type', 'application/pdf');
@@ -296,9 +367,13 @@ router.put('/events/:id/certificates/config', async (req, res) => {
       })
       : existingConfig.templateUrl;
 
+    const nextMapping = hasOwn(req.body, 'mapping')
+      ? validateCertificateMappingFontRefs(mapping || [], { eventId: id })
+      : existingConfig.mapping || [];
+
     configs[selectedCertificateType] = {
       templateUrl: nextTemplateUrl,
-      mapping: mapping || existingConfig.mapping || [],
+      mapping: nextMapping,
       enabled: normalizeCertificateEnabled(enabled, normalizeCertificateEnabled(existingConfig.enabled, true)),
     };
 

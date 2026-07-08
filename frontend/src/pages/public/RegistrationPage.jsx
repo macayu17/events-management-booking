@@ -1,21 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
-import {
-  ArrowRight,
-  CalendarDays,
-  CreditCard,
-  IndianRupee,
-  Loader2,
-  Mail,
-  MapPin,
-  Phone,
-  ShieldCheck,
-  Tag,
-  Ticket,
-  User
-} from 'lucide-react';
-import api, { getImageUrl } from '../../utils/api';
+import { ArrowRight, IndianRupee, Loader2, Tag } from 'lucide-react';
+import api from '../../utils/api';
+import Barcode from '../../components/Barcode';
 import toast from 'react-hot-toast';
 
 const RAZORPAY_CHECKOUT_SRC = 'https://checkout.razorpay.com/v1/checkout.js';
@@ -203,7 +191,6 @@ export default function RegistrationPage() {
       minute: '2-digit'
     }).format(new Date(event.startTime))
     : 'Date to be announced';
-  const posterImage = getImageUrl(event?.posterUrl);
 
   useEffect(() => {
     if (!isPaidEvent || paymentGateway !== 'RAZORPAY' || total <= 0) return undefined;
@@ -217,13 +204,6 @@ export default function RegistrationPage() {
     required: field.required,
     ...(field.type === 'number' ? { valueAsNumber: true } : {})
   });
-
-  const iconForField = (field) => {
-    const label = `${field.label} ${field.key}`.toLowerCase();
-    if (label.includes('email')) return <Mail size={17} />;
-    if (label.includes('phone') || label.includes('mobile')) return <Phone size={17} />;
-    return <User size={17} />;
-  };
 
   const metadataForField = (field) => {
     const label = `${field.label} ${field.key}`.toLowerCase();
@@ -401,27 +381,20 @@ export default function RegistrationPage() {
   if (loading) {
     return (
       <div className="flex min-h-[52vh] items-center justify-center">
-        <div className="relative">
-          <div className="w-16 h-16 rounded-full border-4 border-white/10" />
-          <div className="absolute left-0 top-0 h-16 w-16 animate-spin rounded-full border-t-4 border-[#E23744]" />
-        </div>
+        <Loader2 className="animate-spin text-accent" size={32} />
       </div>
     );
   }
 
   if (processingPayment) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 px-4 backdrop-blur-xl">
-        <div className="relative w-full max-w-md overflow-hidden rounded-[2rem] border border-white/10 bg-[#121010] p-10 text-center shadow-2xl">
-          <div className="absolute left-1/2 top-0 h-32 w-32 -translate-x-1/2 rounded-full bg-[#E23744]/20 blur-[50px]" />
-          <div className="relative mx-auto mb-8 flex h-20 w-20 items-center justify-center rounded-full bg-white/5">
-            <div className="absolute inset-0 animate-spin rounded-full border-t-2 border-[#E23744]" />
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#E23744] shadow-[0_0_24px_rgba(226,55,68,0.5)]">
-              <IndianRupee className="text-white" size={20} />
-            </div>
+      <div className="fixed inset-0 z-50 flex items-center justify-center px-4" style={{ background: 'var(--bg)' }}>
+        <div className="ticket-card max-w-md p-10 text-center">
+          <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-full" style={{ background: 'var(--accent)', color: 'var(--on-accent)' }}>
+            <IndianRupee size={22} className="animate-pulse" />
           </div>
-          <h2 className="mb-2 text-2xl font-black text-white">Processing payment</h2>
-          <p className="leading-relaxed text-[#aaa096]">Please wait while we securely process your transaction.</p>
+          <h2 className="font-display text-2xl uppercase">Processing payment</h2>
+          <p className="mt-2 text-ink-55">Please wait while we securely process your transaction.</p>
         </div>
       </div>
     );
@@ -429,10 +402,10 @@ export default function RegistrationPage() {
 
   if (!form) {
     return (
-      <div className="flex min-h-[52vh] items-center justify-center px-4">
-        <div className="text-center">
-          <h2 className="mb-4 text-xl font-bold text-white">Registration form not available</h2>
-          <button onClick={() => navigate('/')} className="rounded-full bg-white/10 px-6 py-2 text-white transition-all hover:bg-white/20">Go Home</button>
+      <div className="flex min-h-[52vh] items-center justify-center px-4 text-center">
+        <div>
+          <h2 className="mb-4 font-display text-2xl uppercase">Registration form not available</h2>
+          <button onClick={() => navigate('/')} className="btn-outline">Go home</button>
         </div>
       </div>
     );
@@ -440,341 +413,215 @@ export default function RegistrationPage() {
 
   if (registrationClosed) {
     return (
-      <section className="relative flex min-h-[62vh] items-center justify-center overflow-hidden py-10 text-white">
-        <section className="relative z-10 w-full max-w-lg rounded-[2rem] border border-white/10 bg-[#12100e]/90 p-8 text-center shadow-[0_24px_90px_rgba(0,0,0,0.38)] backdrop-blur-2xl">
-          <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl border border-[#E23744]/25 bg-[#E23744]/10 text-[#ff6c76]">
-            <CalendarDays size={24} />
+      <div className="flex min-h-[62vh] items-center justify-center py-10">
+        <div className="ticket-card w-full max-w-lg p-8 text-center">
+          <p className="mono-accent">Registration closed</p>
+          <h1 className="mt-3 font-display text-4xl uppercase">{event.title}</h1>
+          <p className="mt-3 text-sm text-ink-55">This event has already started, so new registrations are no longer accepted.</p>
+          <div className="mt-6 rounded-md border-2 border-dashed p-4 text-left" style={{ borderColor: 'var(--dash)' }}>
+            <p className="mono-label">Event time</p>
+            <p className="mt-1 font-bold">{formattedDate}</p>
           </div>
-          <p className="admin-eyebrow mb-3">Registration closed</p>
-          <h1 className="text-3xl font-black tracking-tight text-white">{event.title}</h1>
-          <p className="mt-3 text-sm leading-6 text-[#aaa096]">
-            This event has already started, so new registrations are no longer accepted.
-          </p>
-          <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.04] p-4 text-left">
-            <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#8f867d]">Event time</p>
-            <p className="mt-1 font-bold text-[#f7efe3]">{formattedDate}</p>
-          </div>
-          <button
-            type="button"
-            onClick={() => navigate(`/events/${id}`)}
-            className="mt-7 inline-flex items-center justify-center rounded-full bg-[#E23744] px-6 py-3 text-sm font-black text-white shadow-[0_16px_36px_rgba(226,55,68,0.24)] transition-all hover:bg-[#f04552]"
-          >
-            Back to event
-          </button>
-        </section>
-      </section>
+          <button type="button" onClick={() => navigate(`/events/${id}`)} className="btn-accent mt-7 inline-block">Back to event</button>
+        </div>
+      </div>
     );
   }
 
+  const stepCard = (n, title, sub) => (
+    <div className="mb-3 flex items-center gap-3">
+      <span className="mono-label">{n} —</span>
+      <div>
+        <h3 className="font-display text-lg uppercase leading-none">{title}</h3>
+        <p className="text-sm text-ink-55">{sub}</p>
+      </div>
+    </div>
+  );
+
   return (
-    <section className="relative min-h-[calc(100dvh-12rem)] overflow-hidden py-2 text-white sm:py-4">
-      <div className="relative z-10 mx-auto grid w-full max-w-6xl gap-6 lg:grid-cols-[0.9fr_1.1fr] lg:items-start">
-        <aside className="lg:sticky lg:top-8">
-          <div className="overflow-hidden rounded-[2rem] border border-white/10 bg-[#12100e]/85 shadow-[0_24px_90px_rgba(0,0,0,0.38)] backdrop-blur-2xl">
-            <div className="relative min-h-[260px] overflow-hidden bg-[#161111]">
-              {posterImage && (
-                <img
-                  src={posterImage}
-                  alt={`${event.title} poster`}
-                  className="absolute inset-0 h-full w-full object-cover"
-                  loading="eager"
-                  decoding="async"
-                />
-              )}
-              <div className="absolute inset-0 bg-gradient-to-t from-[#12100e] via-[#12100e]/45 to-black/20" />
-              <div className="absolute bottom-0 left-0 right-0 min-w-0 p-6">
-                <p className="admin-eyebrow mb-3">Event registration</p>
-                <h1 className="break-words text-balance text-4xl font-black leading-tight tracking-tight text-white md:text-5xl">{event.title}</h1>
-              </div>
+    <div className="py-2 sm:py-4">
+      <button type="button" onClick={() => navigate(`/events/${id}`)} className="mono-label hover:text-accent">← Back to event</button>
+      <div className="mt-4 flex flex-wrap items-baseline gap-4">
+        <h1 className="font-display text-4xl uppercase sm:text-[46px]">Checkout.</h1>
+        <span className="mono-label normal-case tracking-wide">{event.title} · {formattedDate}</span>
+      </div>
+
+      <form onSubmit={handleSubmit(onSubmit)} className="mt-6 grid gap-5 lg:grid-cols-[1fr_360px] lg:items-start">
+        {/* Left: numbered steps */}
+        <div className="space-y-4">
+          <section className="ticket-card-sm p-5 sm:p-6">
+            {stepCard('01', "Who's coming", 'These details appear on your ticket.')}
+            <div className="grid gap-3 md:grid-cols-2">
+              {fields.map((field) => {
+                const isLong = field.type === 'textarea' || field.type === 'select';
+                const fieldId = `registration-${field.key}`;
+                const errorId = `${fieldId}-error`;
+                const fieldMetadata = metadataForField(field);
+                return (
+                  <div key={field.key} className={isLong ? 'md:col-span-2' : ''}>
+                    <label htmlFor={fieldId} className="mono-label mb-1.5 block">
+                      {field.label} {field.required && <span className="text-accent">*</span>}
+                    </label>
+                    {field.type === 'select' ? (
+                      <select
+                        id={fieldId}
+                        {...register(field.key, registerOptions(field))}
+                        {...fieldMetadata}
+                        aria-invalid={errors[field.key] ? 'true' : 'false'}
+                        aria-describedby={errors[field.key] ? errorId : undefined}
+                        className="field"
+                      >
+                        <option value="">Select an option</option>
+                        {(field.options || []).map((option) => (
+                          <option key={option} value={option}>{option}</option>
+                        ))}
+                      </select>
+                    ) : field.type === 'textarea' ? (
+                      <textarea
+                        id={fieldId}
+                        {...register(field.key, registerOptions(field))}
+                        {...fieldMetadata}
+                        aria-invalid={errors[field.key] ? 'true' : 'false'}
+                        aria-describedby={errors[field.key] ? errorId : undefined}
+                        className="field min-h-[110px] resize-none"
+                        placeholder={`Enter ${field.label.toLowerCase()}`}
+                      />
+                    ) : (
+                      <input
+                        id={fieldId}
+                        type={field.type}
+                        {...register(field.key, registerOptions(field))}
+                        {...fieldMetadata}
+                        aria-invalid={errors[field.key] ? 'true' : 'false'}
+                        aria-describedby={errors[field.key] ? errorId : undefined}
+                        className="field"
+                        placeholder={`Enter ${field.label.toLowerCase()}`}
+                      />
+                    )}
+                    {errors[field.key] && (
+                      <p id={errorId} className="mt-1.5 text-xs font-semibold text-accent">This field is required.</p>
+                    )}
+                  </div>
+                );
+              })}
             </div>
+          </section>
 
-            <div className="space-y-4 p-6">
-              <div className="flex gap-3 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-                <CalendarDays className="mt-0.5 shrink-0 text-[#E23744]" size={20} />
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#8f867d]">Date and time</p>
-                  <p className="mt-1 font-bold text-[#f7efe3]">{formattedDate}</p>
-                </div>
-              </div>
-
-              <div className="flex gap-3 rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-                <MapPin className="mt-0.5 shrink-0 text-[#E23744]" size={20} />
-                <div className="min-w-0">
-                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#8f867d]">Venue</p>
-                  <p className="mt-1 break-words font-bold text-[#f7efe3]">{event.location || 'Venue to be announced'}</p>
-                </div>
-              </div>
-
-              <div className="rounded-[1.5rem] border border-[#E23744]/25 bg-[#E23744]/10 p-5">
-                <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#ff7b84]">Amount due</p>
-                <p className="mt-2 text-4xl font-black text-white">{noTierAvailable ? 'Sold out' : total === 0 ? 'Free' : formatMoney(total, currency)}</p>
-                {selectedTier && <p className="mt-2 text-sm text-[#aaa096]">Selected tier: {selectedTier.name}</p>}
-              </div>
-
-              <div className="flex items-center gap-3 text-sm text-[#aaa096]">
-                <ShieldCheck size={18} className="text-emerald-400" />
-                Secure registration and encrypted payment handoff.
-              </div>
-            </div>
-          </div>
-        </aside>
-
-        <section className="rounded-[2rem] border border-white/10 bg-[#111]/88 p-5 shadow-[0_24px_90px_rgba(0,0,0,0.34)] backdrop-blur-2xl sm:p-7 lg:p-8">
-          <div className="mb-8 flex flex-col gap-3 border-b border-white/10 pb-6 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <p className="admin-eyebrow mb-3">Checkout</p>
-              <h2 className="text-3xl font-black tracking-tight text-white">Complete your registration</h2>
-              <p className="mt-2 text-sm leading-6 text-[#aaa096]">Fill your attendee details and choose how you want to pay.</p>
-            </div>
-            <div className="rounded-full border border-white/10 px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-[#aaa096]">
-              Step 1 of 1
-            </div>
-          </div>
-
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-8">
-            <section>
-              <div className="mb-4 flex items-center gap-3">
-                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#E23744]/15 text-[#ff5a66]">
-                  <User size={18} />
-                </span>
-                <div>
-                  <h3 className="font-black text-white">Attendee details</h3>
-                  <p className="text-sm text-[#8f867d]">These details appear on your ticket.</p>
-                </div>
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                {fields.map((field) => {
-                  const isLong = field.type === 'textarea' || field.type === 'select';
-                  const fieldId = `registration-${field.key}`;
-                  const errorId = `${fieldId}-error`;
-                  const fieldMetadata = metadataForField(field);
+          {tiers.length > 0 && (
+            <section className="ticket-card-sm p-5 sm:p-6">
+              {stepCard('02', 'Pick your ticket', 'Choose the pass that fits your access.')}
+              <div className="grid gap-2.5">
+                {tiers.map((tier) => {
+                  const reservedCount = tier.reservedCount ?? tier.soldCount;
+                  const remainingCount = tier.availableCount ?? (tier.capacity ? Math.max(0, tier.capacity - reservedCount) : null);
+                  const soldOut = Boolean(tier.capacity && remainingCount <= 0);
+                  const active = selectedTier?.id === tier.id;
                   return (
-                    <div key={field.key} className={isLong ? 'md:col-span-2' : ''}>
-                      <label htmlFor={fieldId} className="mb-2 block text-xs font-bold uppercase tracking-[0.18em] text-[#aaa096]">
-                        {field.label} {field.required && <span className="text-[#E23744]">*</span>}
-                      </label>
-
-                      {field.type === 'select' ? (
-                        <select
-                          id={fieldId}
-                          {...register(field.key, registerOptions(field))}
-                          {...fieldMetadata}
-                          aria-invalid={errors[field.key] ? 'true' : 'false'}
-                          aria-describedby={errors[field.key] ? errorId : undefined}
-                          className="auth-input"
-                        >
-                          <option value="">Select an option</option>
-                          {(field.options || []).map((option) => (
-                            <option key={option} value={option} className="bg-[#18181b]">{option}</option>
-                          ))}
-                        </select>
-                      ) : field.type === 'textarea' ? (
-                        <textarea
-                          id={fieldId}
-                          {...register(field.key, registerOptions(field))}
-                          {...fieldMetadata}
-                          aria-invalid={errors[field.key] ? 'true' : 'false'}
-                          aria-describedby={errors[field.key] ? errorId : undefined}
-                          className="auth-input min-h-[110px] resize-none"
-                          placeholder={`Enter ${field.label.toLowerCase()}`}
-                        />
-                      ) : (
-                        <div className="relative">
-                          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-[#756d66]">
-                            {iconForField(field)}
-                          </span>
-                          <input
-                            id={fieldId}
-                            type={field.type}
-                            {...register(field.key, registerOptions(field))}
-                            {...fieldMetadata}
-                            aria-invalid={errors[field.key] ? 'true' : 'false'}
-                            aria-describedby={errors[field.key] ? errorId : undefined}
-                            className="auth-input pl-12"
-                            placeholder={`Enter ${field.label.toLowerCase()}`}
-                          />
-                        </div>
-                      )}
-
-                      {errors[field.key] && (
-                        <p id={errorId} className="mt-2 text-xs font-semibold text-[#ff5a66]">This field is required.</p>
-                      )}
-                    </div>
+                    <label
+                      key={tier.id}
+                      className="flex min-w-0 items-center gap-3.5 rounded-lg p-3.5 transition-colors"
+                      style={{
+                        border: `1.5px ${soldOut ? 'dashed' : 'solid'} ${active ? 'var(--accent)' : 'var(--line60)'}`,
+                        cursor: soldOut ? 'not-allowed' : 'pointer',
+                        opacity: soldOut ? 0.55 : 1
+                      }}
+                    >
+                      <input type="radio" name="ticketTier" value={tier.id} className="sr-only" disabled={soldOut} onChange={() => !soldOut && setSelectedTier(tier)} checked={active} />
+                      <span className="flex h-[18px] w-[18px] items-center justify-center rounded-full" style={{ border: '2px solid var(--line60)' }}>
+                        {active && <span className="h-2.5 w-2.5 rounded-full" style={{ background: 'var(--accent)' }} />}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block font-bold">{tier.name}</span>
+                        {tier.description && <span className="block text-sm text-ink-55">{tier.description}</span>}
+                        {tier.capacity && <span className="mono-label mt-0.5 block">{soldOut ? 'Sold out' : `${remainingCount} remaining`}</span>}
+                      </span>
+                      <span className="font-display text-xl">{formatMoney(tier.priceCents / 100, currency, { maximumFractionDigits: 0 })}</span>
+                    </label>
                   );
                 })}
               </div>
             </section>
+          )}
 
-            {tiers.length > 0 && (
-              <section className="border-t border-white/10 pt-7">
-                <div className="mb-4 flex items-center gap-3">
-                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#E23744]/15 text-[#ff5a66]">
-                    <Ticket size={18} />
-                  </span>
-                  <div>
-                    <h3 className="font-black text-white">Ticket type</h3>
-                    <p className="text-sm text-[#8f867d]">Choose the pass that fits your access.</p>
-                  </div>
+          {isPaidEvent && (
+            <section className="ticket-card-sm p-5 sm:p-6">
+              {stepCard('03', 'Payment', 'Apply a code and choose your gateway.')}
+              <div>
+                <label htmlFor="discount-code" className="mono-label mb-1.5 flex items-center gap-2"><Tag size={13} /> Promo code</label>
+                <div className="flex min-w-0 gap-2">
+                  <input
+                    id="discount-code"
+                    type="text"
+                    value={discountCode}
+                    onChange={(e) => setDiscountCode(e.target.value.toUpperCase())}
+                    className="field min-w-0 flex-1 font-mono uppercase tracking-[0.18em]"
+                    placeholder="ENTER CODE"
+                    disabled={!!appliedDiscount}
+                  />
+                  {appliedDiscount ? (
+                    <button type="button" onClick={() => { setAppliedDiscount(null); setDiscountCode(''); setDiscountMsg(''); }} className="btn-outline shrink-0">Remove</button>
+                  ) : (
+                    <button type="button" onClick={handleApplyDiscount} className="btn-ink shrink-0">Apply</button>
+                  )}
                 </div>
-
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {tiers.map((tier) => (
-                    (() => {
-                      const reservedCount = tier.reservedCount ?? tier.soldCount;
-                      const remainingCount = tier.availableCount ?? (tier.capacity ? Math.max(0, tier.capacity - reservedCount) : null);
-                      const soldOut = Boolean(tier.capacity && remainingCount <= 0);
-
-                      return (
-                        <label
-                          key={tier.id}
-                          className={`relative min-w-0 rounded-[1.35rem] border p-4 transition-all focus-within:ring-2 focus-within:ring-[#E23744]/45 ${soldOut
-                            ? 'cursor-not-allowed border-white/5 bg-white/[0.02] opacity-55'
-                            : selectedTier?.id === tier.id
-                              ? 'cursor-pointer border-[#E23744] bg-[#E23744]/10 shadow-[0_18px_45px_rgba(226,55,68,0.12)]'
-                              : 'cursor-pointer border-white/10 bg-white/[0.035] hover:border-white/25'
-                            }`}
-                        >
-                          <input
-                            type="radio"
-                            name="ticketTier"
-                            value={tier.id}
-                            className="sr-only"
-                            disabled={soldOut}
-                            onChange={() => !soldOut && setSelectedTier(tier)}
-                            checked={selectedTier?.id === tier.id}
-                          />
-                          <div className="flex min-w-0 items-start justify-between gap-4">
-                            <div className="min-w-0">
-                              <p className="break-words font-black text-white">{tier.name}</p>
-                              {tier.description && <p className="mt-1 break-words text-sm text-[#8f867d]">{tier.description}</p>}
-                            </div>
-                              <p className="shrink-0 text-lg font-black text-[#ff5a66]">{formatMoney(tier.priceCents / 100, currency, { maximumFractionDigits: 0 })}</p>
-                          </div>
-                          {tier.capacity && (
-                            <p className={`mt-3 text-xs font-bold uppercase tracking-[0.16em] ${soldOut ? 'text-[#ff5a66]' : 'text-[#8f867d]'}`}>
-                              {soldOut ? 'Sold out' : `${remainingCount} remaining`}
-                            </p>
-                          )}
-                        </label>
-                      );
-                    })()
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {isPaidEvent && (
-              <section className="border-t border-white/10 pt-7">
-                <div className="mb-4 flex items-center gap-3">
-                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#E23744]/15 text-[#ff5a66]">
-                    <CreditCard size={18} />
-                  </span>
-                  <div>
-                    <h3 className="font-black text-white">Payment</h3>
-                    <p className="text-sm text-[#8f867d]">Apply a code and choose your gateway.</p>
-                  </div>
-                </div>
-
-                <div className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
-                  <div className="rounded-[1.35rem] border border-white/10 bg-white/[0.035] p-5">
-                    <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#8f867d]">Total amount</p>
-                    <p className="mt-2 text-3xl font-black text-white">{total === 0 ? 'Free' : formatMoney(total, currency)}</p>
-                  </div>
-
-                  <div>
-                    <label htmlFor="discount-code" className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-[#aaa096]">
-                      <Tag size={13} /> Promo code
-                    </label>
-                    <div className="flex min-w-0 gap-2">
-                      <input
-                        id="discount-code"
-                        type="text"
-                        value={discountCode}
-                        onChange={(e) => setDiscountCode(e.target.value.toUpperCase())}
-                        className="auth-input min-w-0 flex-1 font-mono uppercase tracking-[0.18em] sm:tracking-[0.22em]"
-                        placeholder="ENTER CODE"
-                        disabled={!!appliedDiscount}
-                      />
-                      {appliedDiscount ? (
-                        <button type="button" onClick={() => { setAppliedDiscount(null); setDiscountCode(''); setDiscountMsg(''); }} className="shrink-0 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 text-sm font-bold text-red-300 transition-colors hover:bg-red-500/20 sm:px-5">
-                          Remove
-                        </button>
-                      ) : (
-                        <button type="button" onClick={handleApplyDiscount} className="shrink-0 rounded-2xl border border-white/10 bg-white/[0.08] px-4 text-sm font-bold text-white transition-colors hover:bg-white/[0.14] sm:px-5">
-                          Apply
-                        </button>
-                      )}
-                    </div>
-                    {discountMsg && (
-                      <p className={`mt-2 text-xs font-semibold ${discountMsg.type === 'success' ? 'text-emerald-400' : 'text-[#ff5a66]'}`}>
-                        {discountMsg.text}
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                {total > 0 && (
-                  <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                    <PaymentOption
-                      active={paymentGateway === 'RAZORPAY'}
-                      logo="/razorpay-logo.png"
-                      title="Razorpay"
-                      subtitle="Cards, UPI, Netbanking"
-                      onChange={() => setPaymentGateway('RAZORPAY')}
-                    />
-                    <PaymentOption
-                      active={paymentGateway === 'PHONEPE'}
-                      logo="/phonepe-logo.png"
-                      title="PhonePe"
-                      subtitle="UPI, Wallet, Cards"
-                      onChange={() => setPaymentGateway('PHONEPE')}
-                    />
-                  </div>
+                {discountMsg && (
+                  <p className={`mt-2 text-xs font-semibold ${discountMsg.type === 'success' ? 'text-accent' : 'text-accent'}`}>{discountMsg.text}</p>
                 )}
-              </section>
-            )}
+              </div>
 
-            <button
-              type="submit"
-              disabled={submitting || checkoutOpen || noTierAvailable}
-              className="flex w-full items-center justify-center gap-3 rounded-full bg-[#E23744] px-6 py-4 text-base font-black text-white shadow-[0_18px_45px_rgba(226,55,68,0.25)] transition-all hover:-translate-y-0.5 hover:bg-[#f04552] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
-            >
-              {submitting ? (
-                <>
-                  <Loader2 className="animate-spin" size={20} />
-                  Processing...
-                </>
-              ) : (
-                <>
-                  {noTierAvailable ? 'Sold out' : total === 0 ? 'Complete registration' : `Pay ${formatMoney(total, currency)}`}
-                  <ArrowRight size={19} />
-                </>
+              {total > 0 && (
+                <div className="mt-4 grid gap-2.5 sm:grid-cols-2">
+                  <PaymentOption active={paymentGateway === 'RAZORPAY'} logo="/razorpay-logo.png" title="Razorpay" subtitle="Cards, UPI, Netbanking" onChange={() => setPaymentGateway('RAZORPAY')} />
+                  <PaymentOption active={paymentGateway === 'PHONEPE'} logo="/phonepe-logo.png" title="PhonePe" subtitle="UPI, Wallet, Cards" onChange={() => setPaymentGateway('PHONEPE')} />
+                </div>
               )}
-            </button>
-          </form>
-        </section>
-      </div>
-    </section>
+            </section>
+          )}
+        </div>
+
+        {/* Right: order summary ticket */}
+        <aside className="ticket-card relative p-6 lg:sticky lg:top-8">
+          <span className="ticket-notch left-[-10px] top-1/2 -translate-y-1/2" aria-hidden="true" />
+          <span className="ticket-notch right-[-10px] top-1/2 -translate-y-1/2" style={{ left: 'auto' }} aria-hidden="true" />
+          <div className="mono-label">Order summary</div>
+          <div className="mt-3.5 font-display text-2xl uppercase leading-tight">{event.title}</div>
+          <div className="mt-1 font-mono text-[11px] tracking-wide text-ink-55">{formattedDate} · {event.location}</div>
+          {selectedTier && (
+            <div className="mt-4 border-t-2 border-dashed pt-3.5 font-mono text-[12px] text-ink-70" style={{ borderColor: 'var(--dash)' }}>
+              <div className="flex justify-between"><span>{selectedTier.name}</span><span>{formatMoney(selectedTier.priceCents / 100, currency, { maximumFractionDigits: 0 })}</span></div>
+            </div>
+          )}
+          <Barcode seed={event?.id || 'occasio'} height={26} className="my-4" />
+          <div className="flex items-baseline justify-between">
+            <span className="mono-label">Total</span>
+            <span className="font-display text-3xl">{noTierAvailable ? 'Sold out' : total === 0 ? 'FREE' : formatMoney(total, currency)}</span>
+          </div>
+          <button type="submit" disabled={submitting || checkoutOpen || noTierAvailable} className="btn-accent mt-4 flex w-full items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-50">
+            {submitting ? <><Loader2 className="animate-spin" size={18} /> Processing…</> : <>{noTierAvailable ? 'Sold out' : total === 0 ? 'RSVP — Free' : `Pay ${formatMoney(total, currency)}`}<ArrowRight size={18} /></>}
+          </button>
+          <div className="mt-2.5 text-center font-mono text-[9.5px] uppercase tracking-[0.12em] text-ink-45">Secure checkout · UPI / Cards / Netbanking</div>
+        </aside>
+      </form>
+    </div>
   );
 }
 
 function PaymentOption({ active, logo, title, subtitle, onChange }) {
   return (
-    <label className={`relative flex cursor-pointer items-center gap-4 rounded-[1.35rem] border p-4 transition-all focus-within:ring-2 focus-within:ring-[#E23744]/45 ${active
-      ? 'border-[#E23744] bg-[#E23744]/10 shadow-[0_18px_45px_rgba(226,55,68,0.12)]'
-      : 'border-white/10 bg-white/[0.035] hover:border-white/25'
-      }`}>
+    <label
+      className="flex cursor-pointer items-center gap-3 rounded-lg p-3.5 transition-colors"
+      style={{ border: `1.5px solid ${active ? 'var(--accent)' : 'var(--line60)'}` }}
+    >
       <input type="radio" name="paymentGateway" className="sr-only" onChange={onChange} checked={active} />
-      <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white p-2">
+      <span className="flex h-10 w-10 items-center justify-center rounded-md bg-white p-1.5">
         <img src={logo} alt="" aria-hidden="true" className="h-full w-full object-contain" />
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block font-black text-white">{title}</span>
-        <span className="block text-sm text-[#8f867d]">{subtitle}</span>
+        <span className="block font-bold">{title}</span>
+        <span className="block text-sm text-ink-55">{subtitle}</span>
       </span>
-      <span className={`flex h-5 w-5 items-center justify-center rounded-full border-2 ${active ? 'border-[#E23744]' : 'border-[#5d5650]'}`}>
-        {active && <span className="h-2.5 w-2.5 rounded-full bg-[#E23744]" />}
+      <span className="flex h-5 w-5 items-center justify-center rounded-full" style={{ border: `2px solid ${active ? 'var(--accent)' : 'var(--line60)'}` }}>
+        {active && <span className="h-2.5 w-2.5 rounded-full" style={{ background: 'var(--accent)' }} />}
       </span>
     </label>
   );
